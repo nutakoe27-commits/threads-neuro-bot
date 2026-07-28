@@ -4,14 +4,13 @@
 // win rate of each candidate. Used to make the difficulty tiers actually rank.
 //
 //   node scripts/tune.mjs [--seeds 3]
-import { createRequire } from 'node:module';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadPlaywright } from './playwright-loader.mjs';
 
-const require = createRequire(import.meta.url);
-const { chromium } = require('playwright');
+const { chromium } = loadPlaywright();
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GAME_DIR = path.join(ROOT, 'game');

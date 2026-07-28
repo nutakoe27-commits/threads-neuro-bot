@@ -4,16 +4,14 @@
 //   node scripts/playtest.mjs            # run the checks
 //   node scripts/playtest.mjs --shots    # also write game/screenshots/*.png
 //
-// Playwright is expected to come from the global install; NODE_PATH is set by
-// the npm scripts in package.json.
-import { createRequire } from 'node:module';
+// Needs Playwright: npm install -D playwright && npx playwright install chromium
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadPlaywright } from './playwright-loader.mjs';
 
-const require = createRequire(import.meta.url);
-const { chromium } = require('playwright');
+const { chromium } = loadPlaywright();
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GAME_DIR = path.join(ROOT, 'game');

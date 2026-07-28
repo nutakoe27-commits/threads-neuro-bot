@@ -8,14 +8,28 @@ plain ES modules and a `<canvas>`.
 
 ## Running it
 
-The game uses ES modules, so it needs to be served over HTTP rather than opened
-from the filesystem:
+The game uses ES modules, so the browser will refuse to load it from a `file://`
+path — double-clicking `index.html` does not work. It has to be served over HTTP,
+which is one command:
 
 ```bash
 npm start          # serves ./game on http://localhost:8080
-# or
+```
+
+Any static server will do. On macOS, if you would rather not use Node:
+
+```bash
 python3 -m http.server 8080 --directory game
 ```
+
+Then open <http://localhost:8080>. Stop the server with `Ctrl+C`.
+
+> On a clean macOS install the first `python3` call opens a prompt to install the
+> Xcode Command Line Tools. If you would rather skip that, use `npm start`, which
+> only needs Node.
+
+Nothing needs to be built or installed to play — the `npm install` step is only
+required for the test and tuning scripts below.
 
 ## The rules, in full
 
@@ -103,6 +117,13 @@ the whole match. `npm test` asserts a replayed match reproduces its original
 byte-for-byte.
 
 ## Tools
+
+These need Playwright, which is resolved from a local install or the global npm
+root — no `NODE_PATH` juggling:
+
+```bash
+npm install -D playwright && npx playwright install chromium
+```
 
 ```bash
 npm test            # headless smoke test: 24 checks incl. replay determinism

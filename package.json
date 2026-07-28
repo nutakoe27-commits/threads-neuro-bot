@@ -6,11 +6,11 @@
   "type": "module",
   "scripts": {
     "start": "npx --yes serve game -l 8080",
-    "test": "NODE_PATH=/opt/node22/lib/node_modules node scripts/playtest.mjs",
-    "shots": "NODE_PATH=/opt/node22/lib/node_modules node scripts/playtest.mjs --shots",
-    "balance": "NODE_PATH=/opt/node22/lib/node_modules node scripts/balance.mjs",
-    "tune": "NODE_PATH=/opt/node22/lib/node_modules node scripts/tune.mjs",
-    "tune:units": "NODE_PATH=/opt/node22/lib/node_modules node scripts/tune-units.mjs",
+    "test": "node scripts/playtest.mjs",
+    "shots": "node scripts/playtest.mjs --shots",
+    "balance": "node scripts/balance.mjs",
+    "tune": "node scripts/tune.mjs",
+    "tune:units": "node scripts/tune-units.mjs",
     "build": "bash scripts/build.sh"
   }
 }

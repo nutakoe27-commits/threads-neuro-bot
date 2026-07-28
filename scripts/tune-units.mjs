@@ -4,14 +4,13 @@
 // stat line is healthy when it lands near 50% — viable, not dominant.
 //
 //   node scripts/tune-units.mjs [--seeds 3]
-import { createRequire } from 'node:module';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadPlaywright } from './playwright-loader.mjs';
 
-const require = createRequire(import.meta.url);
-const { chromium } = require('playwright');
+const { chromium } = loadPlaywright();
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GAME_DIR = path.join(ROOT, 'game');

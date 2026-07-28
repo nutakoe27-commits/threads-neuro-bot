@@ -14,5 +14,8 @@ npm test         # headless-проверки, включая детермини�
 npm run build    # dist/war-of-dots.zip для загрузки на портал
 ```
 
+Открыть `game/index.html` двойным кликом нельзя — из-за ES-модулей нужен
+локальный HTTP-сервер (`npm start` или `python3 -m http.server 8080 --directory game`).
+
 Полное описание правил, управления и инструментов балансировки —
 в [`game/README.md`](game/README.md).
