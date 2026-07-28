@@ -1,0 +1,16 @@
+{
+  "name": "war-of-dots",
+  "version": "1.0.0",
+  "private": true,
+  "description": "War of Dots — a minimalist single-player real-time strategy game",
+  "type": "module",
+  "scripts": {
+    "start": "npx --yes serve game -l 8080",
+    "test": "NODE_PATH=/opt/node22/lib/node_modules node scripts/playtest.mjs",
+    "shots": "NODE_PATH=/opt/node22/lib/node_modules node scripts/playtest.mjs --shots",
+    "balance": "NODE_PATH=/opt/node22/lib/node_modules node scripts/balance.mjs",
+    "tune": "NODE_PATH=/opt/node22/lib/node_modules node scripts/tune.mjs",
+    "tune:units": "NODE_PATH=/opt/node22/lib/node_modules node scripts/tune-units.mjs",
+    "build": "bash scripts/build.sh"
+  }
+}
