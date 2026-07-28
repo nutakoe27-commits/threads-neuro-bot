@@ -1,5 +1,6 @@
 import {
-  DT, UNITS, BASE, CITY, ECONOMY, MORALE, SUPPLY, DETECTION, VICTORY, info,
+  DT, UNITS, BASE, CITY, ECONOMY, MORALE, SUPPLY, DETECTION, VICTORY,
+  COLLISION, DEPLOY, PRODUCTION, info,
 } from './config.js';
 import { Terrain, buildRoads } from './terrain.js';
 import { Pathfinder } from './pathfinder.js';
@@ -112,13 +113,7 @@ export class Game {
       }
     }
 
-    // A pair of scouts so the opening is not pure waiting.
-    for (const base of this.bases) {
-      for (let i = 0; i < 2; i++) {
-        const a = (i / 2) * Math.PI * 2 + 0.6;
-        this.spawnUnit(base.owner, 'light', base.x + Math.cos(a) * 48, base.y + Math.sin(a) * 48);
-      }
-    }
+    this.deployStartingLines();
 
     this.influence = new InfluenceField(this);
     this.influence.update();
@@ -131,6 +126,56 @@ export class Game {
     this.over = false;
     this.winnerTeam = -1;
     this.effects = [];
+  }
+
+  // The match opens mid-war: every side's troops are already drawn up in a
+  // chain facing the middle of the map, so there is a front from second one.
+  deployStartingLines() {
+    const midX = this.terrain.width / 2;
+    const midY = this.terrain.height / 2;
+
+    for (const faction of this.factions) {
+      if (!faction.alive) continue;
+      const anchors = this.bases.filter((b) => b.owner === faction.index);
+      if (!anchors.length) continue;
+
+      for (const anchor of anchors) {
+        // Face the centre; the chain runs broadside to that direction.
+        let dx = midX - anchor.x;
+        let dy = midY - anchor.y;
+        const len = Math.hypot(dx, dy) || 1;
+        dx /= len;
+        dy /= len;
+        const px = -dy;
+        const py = dx;
+        const standoff = Math.min(len * 0.45, 260);
+
+        const n = DEPLOY.perPoint;
+        for (let i = 0; i < n; i++) {
+          const offset = (i - (n - 1) / 2) * DEPLOY.spacing;
+          const type = i % DEPLOY.heavyEvery === DEPLOY.heavyEvery - 1 ? 'heavy' : 'light';
+          const spot = this.findOpenSpot(
+            anchor.x + dx * standoff + px * offset,
+            anchor.y + dy * standoff + py * offset,
+          );
+          if (spot) this.spawnUnit(faction.index, type, spot.x, spot.y);
+        }
+      }
+    }
+  }
+
+  // Nearest walkable point, so a chain laid across a lake still deploys.
+  findOpenSpot(x, y) {
+    if (this.terrain.isPassable(x, y)) return { x, y };
+    for (let r = 20; r <= 160; r += 20) {
+      for (let a = 0; a < 8; a++) {
+        const ang = (a / 8) * Math.PI * 2;
+        const nx = x + Math.cos(ang) * r;
+        const ny = y + Math.sin(ang) * r;
+        if (this.terrain.isPassable(nx, ny)) return { x: nx, y: ny };
+      }
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------- commands
@@ -159,6 +204,9 @@ export class Game {
       case 'advance':
         this.orderAdvance(cmd.faction, cmd.fromX, cmd.fromY, cmd.x, cmd.y, cmd.radius);
         break;
+      case 'steer':
+        this.orderSteer(cmd.faction, cmd.unit, cmd.x, cmd.y);
+        break;
       case 'attack':
         this.orderAttack(cmd.faction, cmd.units, cmd.target, cmd.targetKind || 'unit');
         break;
@@ -178,17 +226,16 @@ export class Game {
         }
         break;
       case 'produce': {
-        const base = this.bases[cmd.base];
-        if (base && !base.dead && base.owner === cmd.faction) {
-          if (base.produce !== cmd.unitType) {
-            // Refund whatever was already paid for the cancelled unit.
-            if (base.charged) this.factions[base.owner].gold += UNITS[base.produce].cost;
-            base.produce = cmd.unitType;
-            base.progress = 0;
-            base.charged = false;
-          }
-          base.paused = false;
+        const point = cmd.city != null ? this.cities[cmd.city] : this.bases[cmd.base];
+        if (point && !point.dead && point.owner === cmd.faction && point.produce !== cmd.unitType) {
+          // Switching keeps the elapsed fraction, so choosing heavy late in a
+          // light's cycle does not hand back free progress.
+          const was = PRODUCTION[point.produce] ?? PRODUCTION.light;
+          const now = PRODUCTION[cmd.unitType] ?? PRODUCTION.light;
+          point.progress = (point.progress / was) * now;
+          point.produce = cmd.unitType;
         }
+        if (point) point.paused = false;
         break;
       }
       case 'togglePause': {
@@ -197,8 +244,8 @@ export class Game {
         break;
       }
       case 'rally': {
-        const base = this.bases[cmd.base];
-        if (base && !base.dead && base.owner === cmd.faction) base.rally = { x: cmd.x, y: cmd.y };
+        const point = cmd.city != null ? this.cities[cmd.city] : this.bases[cmd.base];
+        if (point && !point.dead && point.owner === cmd.faction) point.rally = { x: cmd.x, y: cmd.y };
         break;
       }
       default:
@@ -253,6 +300,21 @@ export class Game {
       unit.stuckTimer = 0;
       if (!unit.path) unit.path = [{ x: post.x, y: post.y }];
     }
+  }
+
+  // One unit, one arrow: the order every human command is made of.
+  orderSteer(faction, unitId, x, y) {
+    const unit = this.unitsById.get(unitId);
+    if (!unit || unit.dead || unit.faction !== faction) return;
+    unit.order = ORDER.ATTACK_MOVE;
+    unit.targetId = -1;
+    unit.targetBaseId = -1;
+    unit.post = { x, y };
+    unit.dest = { x, y };
+    unit.path = this.pathfinder.find(unit.x, unit.y, x, y, unit.type);
+    unit.pathIndex = 0;
+    unit.stuckTimer = 0;
+    if (!unit.path) unit.path = [{ x, y }];
   }
 
   nearestHomePoint(faction, x, y) {
@@ -363,6 +425,7 @@ export class Game {
 
     for (const u of this.units) if (!u.dead) this.updateUnit(u, DT);
 
+    this.resolveCollisions();
     this.cleanup();
     this.updateEffects(DT);
     this.checkVictory();
@@ -445,33 +508,29 @@ export class Game {
         base.hp = Math.min(base.maxHp, base.hp + BASE.regen * dt);
       }
       if (base.owner < 0 || base.paused) continue;
-
-      const faction = this.factions[base.owner];
-      const cost = UNITS[base.produce].cost;
-      if (!base.charged) {
-        // Production only starts once the unit is paid for.
-        if (faction.gold < cost) continue;
-        faction.gold -= cost;
-        base.charged = true;
-        base.progress = 0;
-      }
-
-      base.progress += dt;
-      if (base.progress >= base.buildTime()) {
-        base.progress = 0;
-        base.charged = false;
-        const angle = this.rng() * Math.PI * 2;
-        const r = BASE.radius + 16;
-        let sx = base.x + Math.cos(angle) * r;
-        let sy = base.y + Math.sin(angle) * r;
-        if (!this.terrain.isPassable(sx, sy)) {
-          sx = base.x;
-          sy = base.y;
-        }
-        const unit = this.spawnUnit(base.owner, base.produce, sx, sy);
-        if (base.rally) this.orderMove(base.owner, [unit.id], base.rally.x, base.rally.y, true);
-      }
+      this.tickPoint(base, dt, BASE.radius + 18);
     }
+    // Captured cities build too — that is what makes taking them worth it.
+    for (const city of this.cities) {
+      if (city.owner < 0) continue;
+      this.tickPoint(city, dt, CITY.radius + 16);
+    }
+  }
+
+  // Every held point turns out one unit on its own clock; a heavy simply takes
+  // twice as long as a light.
+  tickPoint(point, dt, spawnRadius) {
+    point.progress += dt;
+    const wait = PRODUCTION[point.produce] ?? PRODUCTION.light;
+    if (point.progress < wait) return;
+    point.progress = 0;
+    const angle = this.rng() * Math.PI * 2;
+    const spot = this.findOpenSpot(
+      point.x + Math.cos(angle) * spawnRadius,
+      point.y + Math.sin(angle) * spawnRadius,
+    ) || { x: point.x, y: point.y };
+    const unit = this.spawnUnit(point.owner, point.produce, spot.x, spot.y);
+    if (point.rally) this.orderSteer(point.owner, unit.id, point.rally.x, point.rally.y);
   }
 
   updateCities(dt) {
@@ -860,6 +919,51 @@ export class Game {
     unit.y = Math.max(2, Math.min(this.terrain.height - 2, ny));
     unit.vx = vx;
     unit.vy = vy;
+  }
+
+  // Solid bodies. Run after everybody has moved: push overlapping pairs apart
+  // until nothing intersects, so no unit ever ends a tick inside another —
+  // friendly or hostile. This is what makes a chain of troops a wall.
+  resolveCollisions() {
+    const list = this.scratch;
+    for (let pass = 0; pass < COLLISION.iterations; pass++) {
+      this.hash.clear();
+      for (const u of this.units) if (!u.dead) this.hash.insert(u);
+
+      for (const u of this.units) {
+        if (u.dead) continue;
+        const ur = u.radius * COLLISION.scale;
+        this.hash.query(u.x, u.y, ur * 2 + 20, list);
+        for (const other of list) {
+          if (other === u || other.dead) continue;
+          const minDist = ur + other.radius * COLLISION.scale;
+          let dx = u.x - other.x;
+          let dy = u.y - other.y;
+          let d = Math.hypot(dx, dy);
+          if (d >= minDist) continue;
+          if (d < 0.0001) {
+            // Exactly coincident: nudge apart deterministically by id.
+            dx = ((u.id % 7) - 3) || 1;
+            dy = ((other.id % 5) - 2) || 1;
+            d = Math.hypot(dx, dy);
+          }
+          const overlap = (minDist - d) * COLLISION.push;
+          const nx = (dx / d) * overlap;
+          const ny = (dy / d) * overlap;
+          this.nudge(u, nx, ny);
+          this.nudge(other, -nx, -ny);
+        }
+      }
+    }
+  }
+
+  nudge(unit, dx, dy) {
+    const nx = unit.x + dx;
+    const ny = unit.y + dy;
+    if (this.terrain.isPassable(nx, ny)) {
+      unit.x = Math.max(2, Math.min(this.terrain.width - 2, nx));
+      unit.y = Math.max(2, Math.min(this.terrain.height - 2, ny));
+    }
   }
 
   cleanup() {

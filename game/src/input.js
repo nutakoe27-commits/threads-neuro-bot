@@ -80,8 +80,23 @@ export class InputController {
 
   // ------------------------------------------------------------------- orders
 
-  beginArrow(world) {
-    this.arrow = { x1: world.x, y1: world.y, x2: world.x, y2: world.y };
+  unitAt(worldX, worldY, slack = 10) {
+    let best = null;
+    let bestD = Infinity;
+    for (const u of this.game.units) {
+      if (u.faction !== this.faction) continue;
+      const d = Math.hypot(u.x - worldX, u.y - worldY);
+      if (d <= u.radius + slack && d < bestD) {
+        bestD = d;
+        best = u;
+      }
+    }
+    return best;
+  }
+
+  // An arrow always belongs to one soldier: you steer them one at a time.
+  beginArrow(world, unit) {
+    this.arrow = { x1: world.x, y1: world.y, x2: world.x, y2: world.y, unitId: unit ? unit.id : -1 };
   }
 
   finishArrow() {
@@ -89,12 +104,11 @@ export class InputController {
     this.arrow = null;
     if (!a || !this.enabled) return false;
     const length = Math.hypot(a.x2 - a.x1, a.y2 - a.y1);
-    if (length < MIN_DRAG) return false;
+    if (length < MIN_DRAG || a.unitId < 0) return false;
     this.game.issue({
-      type: 'advance',
+      type: 'steer',
       faction: this.faction,
-      fromX: a.x1,
-      fromY: a.y1,
+      unit: a.unitId,
       x: a.x2,
       y: a.y2,
     });
@@ -114,7 +128,12 @@ export class InputController {
       this.panning = { x: p.x, y: p.y };
       return;
     }
-    if (e.button === 0) this.beginArrow(world);
+    if (e.button === 0) {
+      const unit = this.unitAt(world.x, world.y);
+      // Grabbing a soldier draws his order; grabbing bare ground pans the map.
+      if (unit) this.beginArrow(world, unit);
+      else this.panning = { x: p.x, y: p.y };
+    }
   }
 
   onMouseMove(e) {
@@ -137,9 +156,9 @@ export class InputController {
   }
 
   onMouseUp(e) {
-    if (this.panning && e.button !== 0) {
+    if (this.panning) {
       this.panning = null;
-      return;
+      if (e.button === 0 && !this.arrow) return;
     }
     if (e.button !== 0) return;
     const a = this.arrow;
@@ -241,7 +260,9 @@ export class InputController {
     }
     if (this.touches.size === 1 && this.touchMode === 'order') {
       const t = e.changedTouches[0];
-      this.beginArrow(this.camera.screenToWorld(t.clientX - rect.left, t.clientY - rect.top));
+      const w = this.camera.screenToWorld(t.clientX - rect.left, t.clientY - rect.top);
+      const unit = this.unitAt(w.x, w.y, 16);
+      if (unit) this.beginArrow(w, unit);
     }
     if (this.touches.size === 2) {
       const [a, b] = [...this.touches.values()];

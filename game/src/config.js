@@ -29,6 +29,29 @@ export const TERRAIN_INFO = [
   { id: 6, key: 'bridge',   name: 'Bridge',   passable: true,  rough: false, cover: false, speed: 1.25, heavyBonus: 1.1,  pathCost: 0.7, color: '#8a5a2b' },
 ];
 
+// Bodies are solid: nothing walks through anything, friend or enemy. The
+// collision radius is deliberately larger than the drawn dot so a chain of
+// troops is a real wall with no gaps to slip through.
+export const COLLISION = {
+  scale: 1.65,      // multiplier on the unit's drawn radius
+  iterations: 3,    // separation passes per tick
+  push: 0.55,       // how much of an overlap is resolved per pass
+};
+
+// The match opens with both armies already deployed along a front.
+export const DEPLOY = {
+  perPoint: 7,      // troops standing in the line for each point a side holds
+  spacing: 23,      // gap between neighbours in the starting chain
+  heavyEvery: 4,    // every Nth deployed unit is a heavy
+};
+
+// Points build on their own clock. Gold is no longer a gate on production; it
+// only decides whether the army in the field can be fed.
+export const PRODUCTION = {
+  light: 18,        // seconds per light unit, per point
+  heavy: 36,        // heavies take twice as long
+};
+
 export const info = (type) => TERRAIN_INFO[type] || TERRAIN_INFO[0];
 export const isPassableType = (type) => info(type).passable;
 
@@ -39,7 +62,7 @@ export const UNITS = {
     name: 'Light',
     hp: 46,
     dps: 8,
-    range: 32,
+    range: 16,
     speed: 70,
     radius: 6,
     cost: 22,
@@ -53,7 +76,7 @@ export const UNITS = {
     name: 'Heavy',
     hp: 175,
     dps: 28,
-    range: 42,
+    range: 20,
     speed: 44,
     radius: 9,
     cost: 62,

@@ -134,7 +134,8 @@ async function main() {
   await page.waitForTimeout(500);
 
   let s = await state(page);
-  check('match started', !!s && s.units === 4, `units=${s?.units}`);
+  // Both sides deploy a chain at kick-off, so the map opens with a real front.
+  check('both armies deploy a line at the start', s && s.units >= 12, `units=${s?.units}`);
   check('one base each', s.byFaction[0].bases === 1 && s.byFaction[1].bases === 1);
   check('every other point is a neutral city', s.byFaction[0].cities === 0 && s.byFaction[1].cities === 0);
   check('starting gold granted', s.byFaction[0].gold > 0, `gold=${s.byFaction[0].gold}`);
@@ -221,7 +222,8 @@ async function main() {
   await page.waitForTimeout(200); // commands land on the next simulation tick
   const producing = await page.evaluate(() => {
     const s = window.warOfDots.session;
-    return s.game.bases[s.input.selection.baseId].produce;
+    const b = s.game.bases[s.input.selection.baseId];
+    return b ? b.produce : 'none';
   });
   check('production switched to heavy', producing === 'heavy');
   await shot(page, '03-battle');
@@ -237,6 +239,29 @@ async function main() {
   check('cities changed hands', s.byFaction.some((f) => f.captured > 0), 'nobody captured anything');
   check('no runaway unit count', s.units < 400, `units=${s.units}`);
   check('nothing walks through water or mountains', s.onImpassable === 0, `stuck in solid=${s.onImpassable}`);
+  // Bodies are solid: no pair may end a tick inside one another, friend or foe.
+  {
+    const worst = await page.evaluate(async () => {
+      const { COLLISION } = await import('./src/config.js');
+      const g = window.warOfDots.session.game;
+      let deepest = 0;
+      let pair = '';
+      for (let i = 0; i < g.units.length; i++) {
+        for (let j = i + 1; j < g.units.length; j++) {
+          const a = g.units[i];
+          const b = g.units[j];
+          const min = (a.radius + b.radius) * COLLISION.scale;
+          const d = Math.hypot(a.x - b.x, a.y - b.y);
+          if (min - d > deepest) {
+            deepest = min - d;
+            pair = `${a.type}/${b.type}`;
+          }
+        }
+      }
+      return { deepest, pair };
+    });
+    check('units never overlap', worst.deepest < 3, `worst overlap ${worst.deepest.toFixed(1)}px ${worst.pair}`);
+  }
 
   // Zoomed-out overview shot.
   await page.evaluate(() => {
@@ -501,8 +526,9 @@ async function main() {
     await canvas.dispatchEvent('touchstart', {});
     await mobile.evaluate(({ x, y }) => {
       const sess = window.warOfDots.session;
-      sess.input.beginArrow(sess.camera.screenToWorld(x, y));
-      sess.input.arrow.x2 = sess.input.arrow.x1 + 200;
+      const own = sess.game.units.find((u) => u.faction === sess.viewerFaction);
+      sess.input.beginArrow({ x: own.x, y: own.y }, own);
+      sess.input.arrow.x2 = own.x + 200;
       sess.input.finishArrow();
     }, { x: s.x, y: s.y });
     await mobile.waitForTimeout(150);

@@ -90,6 +90,11 @@ export class City {
     this.x = x;
     this.y = y;
     this.owner = -1;
+    this.produce = 'light';
+    this.progress = 0;
+    this.paused = false;
+    this.rally = null;
+    this.dead = false;
     this.captureBy = -1;
     this.captureProgress = 0;
     this.radius = CITY.radius;

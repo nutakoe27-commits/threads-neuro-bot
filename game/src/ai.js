@@ -52,35 +52,39 @@ export class AIController {
     return faction >= 0 && !this.game.areAllied(faction, this.faction) && faction !== this.faction;
   }
 
-  // Bots push stretches of line with the same dragged-arrow order a human uses:
-  // tail on the group's own centre of mass, head on the objective.
+  // Bots steer their troops one at a time, exactly like a human drawing arrows.
+  // Posts are spread across the objective so a squad arrives as a line rather
+  // than a column piling onto one spot.
   send(units, x, y) {
     const fresh = units.filter((u) => {
       const prev = this.lastOrder.get(u.id);
-      return !(prev && Math.hypot(prev.x - x, prev.y - y) < 60 && u.order !== ORDER.IDLE);
+      return !(prev && Math.hypot(prev.x - x, prev.y - y) < 50 && u.order !== ORDER.IDLE);
     });
     if (!fresh.length) return;
 
     let cx = 0;
     let cy = 0;
-    let spread = 0;
     for (const u of fresh) {
       cx += u.x;
       cy += u.y;
-      this.lastOrder.set(u.id, { x, y });
     }
     cx /= fresh.length;
     cy /= fresh.length;
-    for (const u of fresh) spread = Math.max(spread, Math.hypot(u.x - cx, u.y - cy));
 
-    this.game.issue({
-      type: 'advance',
-      faction: this.faction,
-      fromX: cx,
-      fromY: cy,
-      x,
-      y,
-      radius: Math.max(60, spread + 25),
+    // Broadside to the direction of travel.
+    let dx = x - cx;
+    let dy = y - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    const px = -dy / len;
+    const py = dx / len;
+    const half = (fresh.length - 1) / 2;
+
+    fresh.forEach((u, i) => {
+      const offset = (i - half) * 24;
+      const tx = x + px * offset;
+      const ty = y + py * offset;
+      this.lastOrder.set(u.id, { x, y });
+      this.game.issue({ type: 'steer', faction: this.faction, unit: u.id, x: tx, y: ty });
     });
   }
 
@@ -259,47 +263,33 @@ export class AIController {
   }
 
   manageProduction(bases, units) {
-    if (!bases.length) return;
-    const me = this.me;
+    const points = [...bases, ...this.myCities()];
+    if (!points.length) return;
     const heavies = units.filter((u) => u.type === 'heavy').length;
     const ratio = units.length ? heavies / units.length : 0;
 
-    // Hysteresis. Without a dead band the ratio crosses the target every time a
-    // unit pops, the bot flips the build order, and the part-built unit is
-    // refunded and restarted — the treasury fills up while nothing gets made.
+    // Hysteresis, so the choice does not flip every time a unit pops.
     const target = this.profile.heavyRatio;
     if (ratio < target * 0.75) this.wantHeavy = true;
     else if (ratio > target * 1.25) this.wantHeavy = false;
 
-    // Do not build into bankruptcy: leave headroom for the upkeep bill.
-    const margin = me.income - me.upkeep;
-    const canAfford = me.gold > (this.profile.reserve || 0) && margin > -1;
-
-    for (const base of bases) {
-      if (base.paused === canAfford) {
-        this.game.issue({ type: 'togglePause', faction: this.faction, base: base.id });
+    for (const point of points) {
+      let want = this.wantHeavy ? 'heavy' : 'light';
+      // Under attack there is no time for a unit that takes twice as long.
+      if (this.threatened(point)) want = 'light';
+      if (point.produce !== want) {
+        const cmd = { type: 'produce', faction: this.faction, unitType: want };
+        if (point.maxHp) cmd.base = point.id;
+        else cmd.city = point.id;
+        this.game.issue(cmd);
       }
-
-      // Retype only while the current unit is barely started. Waiting for the
-      // unpaid moment does not work — that window is a single tick, so the bot
-      // never caught it and never built a heavy at all.
-      const started = base.charged ? base.progress / UNITS[base.produce].buildTime : 0;
-      if (started < 0.25) {
-        // No affordability guard here on purpose: a bot that only ever orders
-        // what it can pay for right now buys a light the instant it can and
-        // never saves the 85 for a heavy. Setting the base to heavy and letting
-        // it wait is how the gold accumulates.
-        let want = this.wantHeavy ? 'heavy' : 'light';
-        if (this.threatened(base)) want = 'light';
-        if (base.produce !== want) {
-          this.game.issue({ type: 'produce', faction: this.faction, base: base.id, unitType: want });
-        }
-      }
-
-      if (!base.rally) {
-        const objective = this.pickObjective(units.length ? units : [{ x: base.x, y: base.y }]);
-        const staging = (objective && this.stagingPoint(objective)) || base;
-        this.game.issue({ type: 'rally', faction: this.faction, base: base.id, x: staging.x, y: staging.y });
+      if (!point.rally) {
+        const objective = this.pickObjective(units.length ? units : [{ x: point.x, y: point.y }]);
+        const staging = (objective && this.stagingPoint(objective)) || point;
+        const cmd = { type: 'rally', faction: this.faction, x: staging.x, y: staging.y };
+        if (point.maxHp) cmd.base = point.id;
+        else cmd.city = point.id;
+        this.game.issue(cmd);
       }
     }
   }
