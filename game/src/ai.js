@@ -52,16 +52,36 @@ export class AIController {
     return faction >= 0 && !this.game.areAllied(faction, this.faction) && faction !== this.faction;
   }
 
-  send(units, x, y, attackMove = true) {
-    const ids = [];
-    for (const u of units) {
+  // Bots push stretches of line with the same dragged-arrow order a human uses:
+  // tail on the group's own centre of mass, head on the objective.
+  send(units, x, y) {
+    const fresh = units.filter((u) => {
       const prev = this.lastOrder.get(u.id);
-      if (prev && Math.hypot(prev.x - x, prev.y - y) < 45 && u.order !== ORDER.IDLE) continue;
+      return !(prev && Math.hypot(prev.x - x, prev.y - y) < 60 && u.order !== ORDER.IDLE);
+    });
+    if (!fresh.length) return;
+
+    let cx = 0;
+    let cy = 0;
+    let spread = 0;
+    for (const u of fresh) {
+      cx += u.x;
+      cy += u.y;
       this.lastOrder.set(u.id, { x, y });
-      ids.push(u.id);
     }
-    if (!ids.length) return;
-    this.game.issue({ type: attackMove ? 'attackMove' : 'move', faction: this.faction, units: ids, x, y });
+    cx /= fresh.length;
+    cy /= fresh.length;
+    for (const u of fresh) spread = Math.max(spread, Math.hypot(u.x - cx, u.y - cy));
+
+    this.game.issue({
+      type: 'advance',
+      faction: this.faction,
+      fromX: cx,
+      fromY: cy,
+      x,
+      y,
+      radius: Math.max(60, spread + 25),
+    });
   }
 
   think() {
@@ -260,12 +280,17 @@ export class AIController {
         this.game.issue({ type: 'togglePause', faction: this.faction, base: base.id });
       }
 
-      // Only ever retype a base that has not paid for its current unit yet;
-      // switching mid-build throws away the progress.
-      if (!base.charged) {
+      // Retype only while the current unit is barely started. Waiting for the
+      // unpaid moment does not work — that window is a single tick, so the bot
+      // never caught it and never built a heavy at all.
+      const started = base.charged ? base.progress / UNITS[base.produce].buildTime : 0;
+      if (started < 0.25) {
+        // No affordability guard here on purpose: a bot that only ever orders
+        // what it can pay for right now buys a light the instant it can and
+        // never saves the 85 for a heavy. Setting the base to heavy and letting
+        // it wait is how the gold accumulates.
         let want = this.wantHeavy ? 'heavy' : 'light';
         if (this.threatened(base)) want = 'light';
-        if (want === 'heavy' && me.gold < UNITS.heavy.cost * 1.4) want = 'light';
         if (base.produce !== want) {
           this.game.issue({ type: 'produce', faction: this.faction, base: base.id, unitType: want });
         }

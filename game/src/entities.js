@@ -23,6 +23,7 @@ export class Unit {
     this.maxHp = stats.hp;
     this.order = ORDER.IDLE;
     this.dest = null;          // {x, y}
+    this.post = null;          // standing place in the line, if it has one
     this.path = null;          // waypoint list
     this.pathIndex = 0;
     this.targetId = -1;        // enemy unit being attacked
@@ -49,6 +50,7 @@ export class Unit {
   clearOrder() {
     this.order = ORDER.IDLE;
     this.dest = null;
+    this.post = null;
     this.path = null;
     this.pathIndex = 0;
     this.targetId = -1;

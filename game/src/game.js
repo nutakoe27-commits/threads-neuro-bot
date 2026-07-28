@@ -5,6 +5,7 @@ import { Terrain, buildRoads } from './terrain.js';
 import { Pathfinder } from './pathfinder.js';
 import { Unit, Base, City, ORDER } from './entities.js';
 import { InfluenceField } from './influence.js';
+import { assignPosts, segmentUnits, manTheLine, SPACING } from './line.js';
 import { makeRng } from './rng.js';
 
 // How often the territory / supply field is rebuilt. It is part of the
@@ -86,6 +87,7 @@ export class Game {
       income: 0,
       upkeep: 0,
       produced: 0,
+      producedHeavy: 0,
       lost: 0,
       killed: 0,
       captured: 0,
@@ -153,6 +155,9 @@ export class Game {
       case 'move':
       case 'attackMove':
         this.orderMove(cmd.faction, cmd.units, cmd.x, cmd.y, cmd.type === 'attackMove');
+        break;
+      case 'advance':
+        this.orderAdvance(cmd.faction, cmd.fromX, cmd.fromY, cmd.x, cmd.y, cmd.radius);
         break;
       case 'attack':
         this.orderAttack(cmd.faction, cmd.units, cmd.target, cmd.targetKind || 'unit');
@@ -231,6 +236,40 @@ export class Game {
     }
   }
 
+  // A dragged arrow: take the stretch of line under its tail and push it to the
+  // head, keeping the units abreast instead of letting them pile into a column.
+  orderAdvance(faction, fromX, fromY, x, y, radius) {
+    const own = this.units.filter((u) => !u.dead && u.faction === faction);
+    const picked = segmentUnits(own, fromX, fromY, radius);
+    if (!picked.length) return;
+    for (const { unit, post } of assignPosts(picked, fromX, fromY, x, y)) {
+      unit.order = ORDER.ATTACK_MOVE;
+      unit.targetId = -1;
+      unit.targetBaseId = -1;
+      unit.post = { x: post.x, y: post.y };
+      unit.dest = { x: post.x, y: post.y };
+      unit.path = this.pathfinder.find(unit.x, unit.y, post.x, post.y, unit.type);
+      unit.pathIndex = 0;
+      unit.stuckTimer = 0;
+      if (!unit.path) unit.path = [{ x: post.x, y: post.y }];
+    }
+  }
+
+  nearestHomePoint(faction, x, y) {
+    let best = null;
+    let bestD = Infinity;
+    const consider = (p) => {
+      const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    };
+    for (const b of this.bases) if (!b.dead && this.areAlliedOrSame(b.owner, faction)) consider(b);
+    for (const c of this.cities) if (c.owner >= 0 && this.areAlliedOrSame(c.owner, faction)) consider(c);
+    return best;
+  }
+
   orderAttack(faction, ids, targetId, targetKind) {
     const target = targetKind === 'base' ? this.bases[targetId] : this.unitsById.get(targetId);
     const valid = target && !target.dead && !this.areAllied(target.faction ?? target.owner, faction);
@@ -276,6 +315,7 @@ export class Game {
     this.units.push(u);
     this.unitsById.set(u.id, u);
     this.factions[faction].produced++;
+    if (typeKey === 'heavy') this.factions[faction].producedHeavy++;
     return u;
   }
 
@@ -599,6 +639,7 @@ export class Game {
     } else {
       if (unit.order === ORDER.ATTACK) unit.clearOrder();
       if (unit.order === ORDER.MOVE || unit.order === ORDER.ATTACK_MOVE) moved = this.followPath(unit, dt);
+      else if (unit.order === ORDER.IDLE) moved = this.holdLine(unit, dt);
     }
 
     if (!moved) this.separate(unit, dt);
@@ -619,6 +660,35 @@ export class Game {
     }
     unit.lastX = unit.x;
     unit.lastY = unit.y;
+  }
+
+  // Idle troops are not spectators: they walk to the nearest stretch of front
+  // and stand shoulder to shoulder with whoever is already there. This is what
+  // turns a crowd into a line, and what closes a gap when somebody dies.
+  holdLine(unit, dt) {
+    const team = this.factions[unit.faction].team;
+    const front = this.influence.frontForTeam(team);
+    const target = manTheLine(this, unit, front);
+    if (!target) return false;
+
+    // Slide along the line rather than stacking on the same spot.
+    const list = this.hash.query(unit.x, unit.y, SPACING, this.scratch);
+    let sx = 0;
+    let sy = 0;
+    for (const other of list) {
+      if (other === unit || other.dead || other.faction !== unit.faction) continue;
+      const dx = unit.x - other.x;
+      const dy = unit.y - other.y;
+      const d = Math.hypot(dx, dy);
+      if (d === 0 || d > SPACING) continue;
+      sx += (dx / d) * (SPACING - d);
+      sy += (dy / d) * (SPACING - d);
+    }
+
+    const tx = target.x + sx;
+    const ty = target.y + sy;
+    if (Math.hypot(tx - unit.x, ty - unit.y) < 4) return false;
+    return this.steer(unit, tx, ty, dt);
   }
 
   // Encirclement: cut the route home and the unit collapses within seconds.

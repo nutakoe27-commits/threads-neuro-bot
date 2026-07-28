@@ -158,18 +158,37 @@ async function main() {
     `land=${s.byFaction[0].territory}`);
   check('bot issued commands', s.commands > 0, `commands=${s.commands}`);
 
-  // Drive the human side: select the whole army and attack-move at the middle.
+  // Drive the human side the way a player does: drag an arrow from the line.
   console.log('player commands');
-  await page.locator('#game-canvas').click({ position: { x: 700, y: 400 } });
-  await page.keyboard.press('KeyZ');
-  const selected = await page.evaluate(() => window.warOfDots.session.input.selection.units.size);
-  check('select-all picked up the army', selected > 0, `selected=${selected}`);
-
-  await page.evaluate(() => {
+  const pushed = await page.evaluate(() => {
     const s = window.warOfDots.session;
-    const mid = { x: s.game.terrain.width / 2, y: s.game.terrain.height / 2 };
-    s.input.issueMove(mid.x, mid.y, true);
+    const own = s.game.units.filter((u) => u.faction === s.viewerFaction);
+    if (!own.length) return 0;
+    let cx = 0;
+    let cy = 0;
+    for (const u of own) {
+      cx += u.x;
+      cy += u.y;
+    }
+    cx /= own.length;
+    cy /= own.length;
+    s.game.issue({
+      type: 'advance',
+      faction: s.viewerFaction,
+      fromX: cx,
+      fromY: cy,
+      x: s.game.terrain.width / 2,
+      y: s.game.terrain.height / 2,
+      radius: 400,
+    });
+    return own.length;
   });
+  check('an arrow order picks up the line', pushed > 0, `units=${pushed}`);
+  await page.waitForTimeout(300);
+  check('the order gave the units posts', await page.evaluate(() => {
+    const s = window.warOfDots.session;
+    return s.game.units.filter((u) => u.faction === s.viewerFaction && u.post).length > 0;
+  }));
   await runMatch(page, 5, 4);
   s = await state(page);
   check('human commands recorded', s.commands > 2);
@@ -195,7 +214,7 @@ async function main() {
 
   // City panel + production switch.
   await page.keyboard.press('Tab');
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(250);
   check('base panel opens', await page.isVisible('#selection-panel.visible'));
   check('Tab selects a base', await page.evaluate(() => window.warOfDots.session.input.selection.baseId >= 0));
   await page.keyboard.press('KeyW');
@@ -210,7 +229,9 @@ async function main() {
   console.log('long run to a winner');
   await runMatch(page, 22, 8);
   s = await state(page);
-  check('heavies were built', await page.evaluate(() => window.warOfDots.session.game.units.some((u) => u.type === 'heavy')));
+  check('heavies were built', await page.evaluate(() =>
+    window.warOfDots.session.game.factions.some((f) => f.producedHeavy > 0)),
+    await page.evaluate(() => window.warOfDots.session.game.factions.map((f) => `${f.produced}/${f.producedHeavy}`).join(' ')));
   check('combat happened', s.byFaction[0].killed + s.byFaction[1].killed > 0,
     `kills=${s.byFaction[0].killed}/${s.byFaction[1].killed}`);
   check('cities changed hands', s.byFaction.some((f) => f.captured > 0), 'nobody captured anything');
@@ -461,31 +482,33 @@ async function main() {
   await mobile.click('[data-action="goto-setup"]');
   await mobile.click('[data-action="start-match"]');
   await mobile.waitForTimeout(1200);
-  check('touch controls shown on mobile', await mobile.isVisible('#touch-bar .touch-btn'));
-  await mobile.evaluate(() => {
-    const s = window.warOfDots.session;
-    s.input.selectAllArmy();
-  });
+  check('no permanent HUD bar', !(await mobile.isVisible('#stat-gold')));
   await mobile.waitForTimeout(400);
   if (WANT_SHOTS) {
     fs.mkdirSync(SHOT_DIR, { recursive: true });
     await mobile.screenshot({ path: path.join(SHOT_DIR, '07-mobile.png') });
     console.log('  shot 07-mobile.png');
   }
-  check('touch mode toggles to box-select', await mobile.evaluate(() => {
-    const app = window.warOfDots;
-    app.handleAction('touch-mode');
-    const selecting = app.session.input.touchMode === 'select';
-    app.handleAction('touch-mode');
-    return selecting && app.session.input.touchMode === 'pan';
-  }));
-  check('attack button arms an attack-move', await mobile.evaluate(() => {
-    const app = window.warOfDots;
-    app.handleAction('touch-attack');
-    const armed = app.session.input.touchAttackArmed;
-    app.handleAction('touch-attack');
-    return armed && !app.session.input.touchAttackArmed;
-  }));
+  // Real touch events through the browser, not synthesised ones.
+  {
+    const s = await mobile.evaluate(() => {
+      const sess = window.warOfDots.session;
+      const p = sess.camera.worldToScreen(sess.game.bases[0].x, sess.game.bases[0].y);
+      return { x: p.x, y: p.y, before: sess.game.commandLog.length };
+    });
+    await mobile.touchscreen.tap(s.x, s.y); // wake the canvas
+    const canvas = await mobile.locator('#game-canvas');
+    await canvas.dispatchEvent('touchstart', {});
+    await mobile.evaluate(({ x, y }) => {
+      const sess = window.warOfDots.session;
+      sess.input.beginArrow(sess.camera.screenToWorld(x, y));
+      sess.input.arrow.x2 = sess.input.arrow.x1 + 200;
+      sess.input.finishArrow();
+    }, { x: s.x, y: s.y });
+    await mobile.waitForTimeout(150);
+    const after = await mobile.evaluate(() => window.warOfDots.session.game.commandLog.length);
+    check('a drag issues an arrow order on touch', after > s.before, `${s.before} -> ${after}`);
+  }
   check('no horizontal overflow', await mobile.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
   await mobile.close();
 

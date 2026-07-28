@@ -140,7 +140,7 @@ export class Session {
   render() {
     this.renderer.draw(this.game, this.camera, {
       selection: this.input.selection,
-      selectionBox: this.input.selectionBox,
+      arrow: this.input.arrow,
       viewerFaction: this.viewerFaction,
       hoverUnitId: this.input.hoverUnitId,
       showCommands: true,
@@ -175,6 +175,7 @@ export class Session {
 
   updateTouchButtons() {
     const mode = document.getElementById('touch-mode');
+    if (!mode) return;
     const attack = document.getElementById('touch-attack');
     if (mode) {
       const selecting = this.input.touchMode === 'select';
@@ -242,6 +243,7 @@ export class Session {
 
   renderFactionBars() {
     const host = document.getElementById('faction-bars');
+    if (!host) return;
     host.innerHTML = '';
     this.factionRows = new Map();
     for (const f of this.game.factions) {
@@ -258,39 +260,8 @@ export class Session {
   }
 
   updateHud() {
-    const game = this.game;
-    const me = this.viewerFaction;
-    const f = game.factions[me];
-    const units = game.units.filter((u) => u.faction === me);
-    const light = units.filter((u) => u.type === 'light').length;
-    const heavy = units.length - light;
-    const net = f.income - f.upkeep;
-
-    const gold = document.getElementById('stat-gold');
-    gold.querySelector('.stat-value').textContent = String(Math.floor(f.gold));
-    gold.querySelector('.stat-sub').textContent = `${net >= 0 ? '+' : ''}${net}/s`;
-    gold.classList.toggle('warn', f.gold <= 0 && net < 0);
-    gold.classList.toggle('good', net > 0);
-
-    const share = game.territoryShare(me);
-    const territory = document.getElementById('stat-territory');
-    territory.querySelector('.stat-value').textContent = `${Math.round(share * 100)}%`;
-    territory.classList.toggle('good', share >= VICTORY.territoryShare * 0.8);
-
-    document.getElementById('stat-bases').querySelector('.stat-value').textContent = String(game.countBases(me));
-    document.getElementById('stat-army').querySelector('.stat-value').textContent = `${light}L \u00b7 ${heavy}H`;
-    document.getElementById('stat-clock').querySelector('.stat-value').textContent = formatTime(game.time);
-    document.getElementById('stat-speed').querySelector('.stat-value').textContent = `${this.speed}\u00d7`;
-
-    if (this.factionRows) {
-      for (const [index, row] of this.factionRows) {
-        const faction = game.factions[index];
-        row.querySelector('.cities').textContent = String(game.countBases(index));
-        row.querySelector('.units').textContent = `${Math.round(game.territoryShare(index) * 100)}%`;
-        row.classList.toggle('dead', !faction.alive);
-      }
-    }
-
+    // There is no permanent HUD any more — the map is the interface. Only the
+    // panel for a clicked base has anything to refresh.
     this.updateSelectionPanel();
   }
 

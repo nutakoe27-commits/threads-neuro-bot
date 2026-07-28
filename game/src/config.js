@@ -42,8 +42,8 @@ export const UNITS = {
     range: 32,
     speed: 70,
     radius: 6,
-    cost: 30,
-    buildTime: 3.5,
+    cost: 22,
+    buildTime: 1.4,
     sight: 150,
     // Light troops shrug off terrain and take cover in the rough.
     rough: { damage: 1, taken: 0.8 },
@@ -56,8 +56,8 @@ export const UNITS = {
     range: 42,
     speed: 44,
     radius: 9,
-    cost: 85,
-    buildTime: 9,
+    cost: 62,
+    buildTime: 4,
     sight: 140,
     // Heavies are built for open ground and are near useless in the trees.
     rough: { damage: 0.4, taken: 1.3 },
@@ -71,7 +71,7 @@ export const BASE = {
   radius: 30,
   regen: 8,           // hp per second once nothing has attacked it recently
   regenDelay: 12,     // seconds of quiet before repairs start
-  income: 5,          // gold per second
+  income: 9,          // gold per second
   freeRadius: 110,    // units this close are garrisoned and cost no upkeep
 };
 
@@ -80,15 +80,17 @@ export const CITY = {
   captureRadius: 78,
   captureTime: 6,      // unit-seconds needed for a solo capturer
   captureMaxUnits: 4,  // more than this stops speeding the capture up
-  income: 3,           // gold per second once captured
+  income: 5,           // gold per second once captured
   freeRadius: 78,      // garrisoned units inside cost no upkeep
 };
 
 // The whole economy: bases and cities earn, field units spend, and a deficit
 // starves the army.
+// Sized so a side can field dozens of troops, not a handful: the game is about
+// holding a continuous line, and a line needs bodies to stand in it.
 export const ECONOMY = {
-  startGold: 130,
-  upkeepPerUnit: 1,        // gold per second, per unit outside a city or base
+  startGold: 160,
+  upkeepPerUnit: 0.5,      // gold per second, per unit outside a city
   starveDpsPerGold: 0.9,   // hp/s lost per gold/s of deficit
   maxStarveDps: 9,
   minGold: -60,            // the debt cannot spiral past this

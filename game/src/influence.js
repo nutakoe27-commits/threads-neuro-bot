@@ -8,10 +8,11 @@ import { chainSegments, chaikin } from './contour.js';
 
 export const CELL = 40;
 
-// Bases and cities project a fixed distance. Units *stack*: one scout barely
-// claims the ground under its feet, but a massed army out-projects a base — which
-// is what lets an attack take territory instead of instantly being encircled.
-const REACH = { base: 380, city: 260, unitEach: 85, unitCap: 430 };
+// The front is decided by where the troops are standing. Units project further
+// than anything else, so the boundary between two facing chains settles midway
+// between them and the drawn line hugs the actual line of contact. Bases and
+// cities are weaker anchors that only hold the empty rear.
+const REACH = { base: 520, city: 430, unit: 620 };
 
 class MaxHeap {
   constructor(capacity) {
@@ -128,11 +129,13 @@ export class InfluenceField {
       this.owner[i] = best;
     }
 
+    this.fronts = [];
     for (let t = 0; t < this.teams.length; t++) {
       let count = 0;
       for (let i = 0; i < this.owner.length; i++) if (this.owner[i] === t) count++;
       this.shares[t] = this.passableCount ? count / this.passableCount : 0;
       this.traceSupply(t);
+      this.fronts[t] = this.frontPoints(t);
     }
 
     this.version++;
@@ -147,11 +150,10 @@ export class InfluenceField {
     const team = this.teams[teamIdx];
     const game = this.game;
 
-    // Units accumulate into their cell first, so a stack counts as a stack.
     for (const u of game.units) {
       if (u.dead || game.factions[u.faction].team !== team) continue;
       const c = this.cellOf(u.x, u.y);
-      reach[c] = Math.min(REACH.unitCap, reach[c] + REACH.unitEach);
+      reach[c] = Math.max(reach[c], REACH.unit);
     }
     for (const b of game.bases) {
       if (b.dead || b.owner < 0 || game.factions[b.owner].team !== team) continue;
@@ -232,9 +234,40 @@ export class InfluenceField {
     }
   }
 
+  // Cells that touch a different owner: the front, as a set of world points.
+  // Units use this to find where the line is and take a post on it.
+  frontPoints(teamIdx) {
+    const pts = [];
+    const cs = this.cellSize;
+    for (let cy = 0; cy < this.rows; cy++) {
+      for (let cx = 0; cx < this.cols; cx++) {
+        const i = cy * this.cols + cx;
+        if (this.owner[i] !== teamIdx || !this.passable[i]) continue;
+        let edge = false;
+        for (const [dx, dy] of this.neighbours) {
+          const nx = cx + dx;
+          const ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= this.cols || ny >= this.rows) continue;
+          const j = ny * this.cols + nx;
+          if (this.passable[j] && this.owner[j] !== teamIdx) {
+            edge = true;
+            break;
+          }
+        }
+        if (edge) pts.push({ x: cx * cs + cs / 2, y: cy * cs + cs / 2 });
+      }
+    }
+    return pts;
+  }
+
   ownerTeamAt(x, y) {
     const t = this.owner[this.cellOf(x, y)];
     return t < 0 ? -1 : this.teams[t];
+  }
+
+  frontForTeam(team) {
+    const idx = this.teamIndex.get(team);
+    return idx === undefined ? [] : this.fronts[idx] || [];
   }
 
   isSuppliedAt(x, y, team) {
@@ -252,15 +285,21 @@ export class InfluenceField {
   frontLines() {
     const segments = [];
     const cs = this.cellSize;
-    const differs = (a, b) => a !== b && (a >= 0 || b >= 0);
+    // Only draw where two owners actually meet on walkable ground. Without the
+    // passability test every lake and cliff gets outlined, because impassable
+    // cells belong to nobody.
+    const boundary = (i, j) =>
+      this.passable[i] && this.passable[j] && this.owner[i] !== this.owner[j] &&
+      (this.owner[i] >= 0 || this.owner[j] >= 0);
+
     for (let cy = 0; cy < this.rows; cy++) {
       for (let cx = 0; cx < this.cols; cx++) {
-        const here = this.owner[cy * this.cols + cx];
-        if (cx + 1 < this.cols && differs(here, this.owner[cy * this.cols + cx + 1])) {
+        const i = cy * this.cols + cx;
+        if (cx + 1 < this.cols && boundary(i, i + 1)) {
           const x = (cx + 1) * cs;
           segments.push([{ x, y: cy * cs }, { x, y: (cy + 1) * cs }]);
         }
-        if (cy + 1 < this.rows && differs(here, this.owner[(cy + 1) * this.cols + cx])) {
+        if (cy + 1 < this.rows && boundary(i, i + this.cols)) {
           const y = (cy + 1) * cs;
           segments.push([{ x: cx * cs, y }, { x: (cx + 1) * cs, y }]);
         }

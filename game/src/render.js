@@ -193,7 +193,7 @@ export class Renderer {
 
   draw(game, camera, view) {
     const ctx = this.ctx;
-    const { selection, selectionBox, viewerFaction, hoverUnitId, showCommands } = view;
+    const { selection, viewerFaction, hoverUnitId, showCommands, arrow } = view;
 
     ctx.save();
     ctx.scale(this.dpr, this.dpr);
@@ -214,21 +214,9 @@ export class Renderer {
     this.drawOrders(ctx, game, selection, showCommands);
     this.drawUnits(ctx, game, b, selection, hoverUnitId, viewerFaction);
     this.drawEffects(ctx, game);
+    if (arrow) this.drawArrow(ctx, arrow, camera);
 
     ctx.restore();
-
-    if (selectionBox) {
-      ctx.strokeStyle = 'rgba(20,26,32,0.9)';
-      ctx.fillStyle = 'rgba(255,255,255,0.22)';
-      ctx.lineWidth = 1.5;
-      const x = Math.min(selectionBox.x1, selectionBox.x2);
-      const y = Math.min(selectionBox.y1, selectionBox.y2);
-      const w = Math.abs(selectionBox.x2 - selectionBox.x1);
-      const h = Math.abs(selectionBox.y2 - selectionBox.y1);
-      ctx.fillRect(x, y, w, h);
-      ctx.strokeRect(x + 0.5, y + 0.5, w, h);
-    }
-
     ctx.restore();
     this.drawMinimap(game, camera, viewerFaction);
   }
@@ -396,6 +384,44 @@ export class Renderer {
         ctx.stroke();
       }
     }
+  }
+
+  // The order being dragged: tail on the stretch of line it picks up, head where
+  // that stretch is being sent.
+  drawArrow(ctx, arrow, camera) {
+    const dx = arrow.x2 - arrow.x1;
+    const dy = arrow.y2 - arrow.y1;
+    const len = Math.hypot(dx, dy);
+    const scale = Math.max(1, 1 / camera.zoom);
+
+    ctx.strokeStyle = 'rgba(15,20,25,0.55)';
+    ctx.lineWidth = 3 * scale;
+    ctx.beginPath();
+    ctx.arc(arrow.x1, arrow.y1, 150, 0, Math.PI * 2);
+    ctx.setLineDash([8 * scale, 8 * scale]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    if (len < 6) return;
+    const ux = dx / len;
+    const uy = dy / len;
+    const head = Math.min(34, len * 0.4) * scale;
+
+    ctx.strokeStyle = '#12161a';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 6 * scale;
+    ctx.beginPath();
+    ctx.moveTo(arrow.x1, arrow.y1);
+    ctx.lineTo(arrow.x2 - ux * head * 0.6, arrow.y2 - uy * head * 0.6);
+    ctx.stroke();
+
+    ctx.fillStyle = '#12161a';
+    ctx.beginPath();
+    ctx.moveTo(arrow.x2, arrow.y2);
+    ctx.lineTo(arrow.x2 - ux * head + uy * head * 0.45, arrow.y2 - uy * head - ux * head * 0.45);
+    ctx.lineTo(arrow.x2 - ux * head - uy * head * 0.45, arrow.y2 - uy * head + ux * head * 0.45);
+    ctx.closePath();
+    ctx.fill();
   }
 
   drawOrders(ctx, game, selection, showCommands) {

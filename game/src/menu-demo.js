@@ -97,7 +97,7 @@ export class MenuDemo {
 
     this.renderer.draw(this.game, this.camera, {
       selection: this.emptySelection,
-      selectionBox: null,
+      arrow: null,
       viewerFaction: -1,
       hoverUnitId: -1,
       showCommands: false,
