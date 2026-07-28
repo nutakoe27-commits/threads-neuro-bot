@@ -1,4 +1,4 @@
-import { UNITS, CITY } from './config.js';
+import { UNITS, CITY, BASE } from './config.js';
 
 export const ORDER = {
   IDLE: 'idle',
@@ -22,12 +22,20 @@ export class Unit {
     this.hp = stats.hp;
     this.maxHp = stats.hp;
     this.order = ORDER.IDLE;
-    this.dest = null;        // {x, y}
-    this.path = null;        // waypoint list
+    this.dest = null;          // {x, y}
+    this.path = null;          // waypoint list
     this.pathIndex = 0;
-    this.targetId = -1;      // current attack target
-    this.attackCooldown = 0; // purely cosmetic pacing for the muzzle flash
+    this.targetId = -1;        // enemy unit being attacked
+    this.targetBaseId = -1;    // enemy base being attacked
+    this.attackCooldown = 0;
+    this.morale = 1;
+    this.sinceHit = 99;        // seconds since last taking damage
+    this.supplied = true;
+    this.cutoffTimer = 0;
+    this.garrisoned = false;   // inside a friendly city, so upkeep is free
+    this.atHome = false;       // inside a friendly base or city: repairs and rallies
     this.starving = false;
+    this.visibleMask = 0;      // bit per faction that can currently see this unit
     this.stuckTimer = 0;
     this.lastX = x;
     this.lastY = y;
@@ -44,26 +52,44 @@ export class Unit {
     this.path = null;
     this.pathIndex = 0;
     this.targetId = -1;
+    this.targetBaseId = -1;
   }
 }
 
-export class City {
+// A main base: the gold engine, the factory, and the thing you must destroy.
+export class Base {
   constructor(id, x, y, owner) {
     this.id = id;
     this.x = x;
     this.y = y;
-    this.owner = owner;        // faction index, or -1 for neutral
-    this.produce = 'light';    // which unit type this city builds
-    this.progress = 0;         // seconds accumulated toward the current unit
-    this.paused = false;       // player toggled production off
-    this.captureBy = -1;
-    this.captureProgress = 0;
+    this.owner = owner;
+    this.hp = BASE.hp;
+    this.maxHp = BASE.hp;
+    this.radius = BASE.radius;
+    this.produce = 'light';
+    this.progress = 0;
+    this.paused = false;
+    this.charged = false;   // gold for the unit under construction is paid up front
     this.rally = null;
-    this.radius = CITY.radius;
-    this.capital = false;
+    this.sinceHit = 99;
+    this.dead = false;
   }
 
   buildTime() {
     return UNITS[this.produce].buildTime;
+  }
+}
+
+// A neutral point worth capturing: pure economy, plus free upkeep for whoever
+// garrisons it.
+export class City {
+  constructor(id, x, y) {
+    this.id = id;
+    this.x = x;
+    this.y = y;
+    this.owner = -1;
+    this.captureBy = -1;
+    this.captureProgress = 0;
+    this.radius = CITY.radius;
   }
 }

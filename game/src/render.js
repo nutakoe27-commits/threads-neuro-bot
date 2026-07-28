@@ -1,6 +1,5 @@
-import { TERRAIN, TERRAIN_INFO, PALETTE, FACTION_COLORS, NEUTRAL_COLOR, CITY, info } from './config.js';
+import { TERRAIN, TERRAIN_INFO, PALETTE, FACTION_COLORS, NEUTRAL_COLOR, CITY, BASE, info } from './config.js';
 import { CELL } from './terrain.js';
-import { computeFrontLines } from './territory.js';
 import { traceContours } from './contour.js';
 
 function shade(hex, amount) {
@@ -210,9 +209,10 @@ export class Renderer {
     ctx.drawImage(this.terrainCanvas, 0, 0);
 
     this.drawFrontLines(ctx, game, camera);
-    this.drawCities(ctx, game, selection, viewerFaction);
+    this.drawCities(ctx, game, selection);
+    this.drawBases(ctx, game, selection, viewerFaction);
     this.drawOrders(ctx, game, selection, showCommands);
-    this.drawUnits(ctx, game, b, selection, hoverUnitId);
+    this.drawUnits(ctx, game, b, selection, hoverUnitId, viewerFaction);
     this.drawEffects(ctx, game);
 
     ctx.restore();
@@ -230,14 +230,15 @@ export class Renderer {
     }
 
     ctx.restore();
-    this.drawMinimap(game, camera);
+    this.drawMinimap(game, camera, viewerFaction);
   }
 
-  // The border between territories. Recomputed only when a city changes hands.
+  // The front line, taken straight from the influence field, so it shifts with
+  // the armies rather than only when a city changes hands.
   drawFrontLines(ctx, game, camera) {
-    if (this.frontVersion !== game.territoryVersion) {
-      this.frontVersion = game.territoryVersion;
-      this.frontLines = computeFrontLines(game);
+    if (this.frontVersion !== game.influence.version) {
+      this.frontVersion = game.influence.version;
+      this.frontLines = game.influence.frontLines();
     }
     if (!this.frontLines.length) return;
     ctx.strokeStyle = PALETTE.border;
@@ -252,7 +253,95 @@ export class Renderer {
     ctx.stroke();
   }
 
-  drawCities(ctx, game, selection, viewerFaction) {
+  // Bases are the big dots: the gold engine, the factory, and the win condition.
+  drawBases(ctx, game, selection, viewerFaction) {
+    for (const base of game.bases) {
+      const color = this.colorOf(base.owner);
+      const r = BASE.radius;
+
+      if (base.dead) {
+        ctx.beginPath();
+        ctx.arc(base.x, base.y, r * 0.7, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(20,24,28,0.45)';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        continue;
+      }
+
+      // Garrison ring: units inside eat for free.
+      ctx.beginPath();
+      ctx.arc(base.x, base.y, BASE.freeRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.3;
+      ctx.setLineDash([10, 10]);
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+
+      ctx.beginPath();
+      ctx.arc(base.x, base.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = '#12161a';
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      star(ctx, base.x, base.y, r * 0.62, r * 0.27);
+      ctx.fill();
+
+      // Structural damage runs as a red arc around the rim.
+      const hpFrac = base.hp / base.maxHp;
+      if (hpFrac < 0.999) {
+        ctx.beginPath();
+        ctx.arc(base.x, base.y, r + 7, -Math.PI / 2, -Math.PI / 2 + hpFrac * Math.PI * 2);
+        ctx.strokeStyle = hpFrac > 0.5 ? '#3ddc6b' : hpFrac > 0.25 ? '#ffd23f' : '#ff4d4d';
+        ctx.lineWidth = 5;
+        ctx.stroke();
+      }
+
+      if (!base.paused && base.charged) {
+        const frac = Math.min(1, base.progress / base.buildTime());
+        ctx.beginPath();
+        ctx.arc(base.x, base.y, r + 14, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+        ctx.strokeStyle = base.produce === 'heavy' ? '#12161a' : '#ffffff';
+        ctx.lineWidth = base.produce === 'heavy' ? 4.5 : 3;
+        ctx.stroke();
+      }
+
+      if (selection.baseId === base.id) {
+        ctx.beginPath();
+        ctx.arc(base.x, base.y, r + 20, 0, Math.PI * 2);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+        if (base.rally) {
+          ctx.beginPath();
+          ctx.moveTo(base.x, base.y);
+          ctx.lineTo(base.rally.x, base.rally.y);
+          ctx.strokeStyle = color;
+          ctx.setLineDash([7, 6]);
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.arc(base.rally.x, base.rally.y, 6, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+
+      if (base.owner === viewerFaction && base.paused) {
+        ctx.fillStyle = '#12161a';
+        ctx.fillRect(base.x - 7, base.y - r - 22, 5, 13);
+        ctx.fillRect(base.x + 2, base.y - r - 22, 5, 13);
+      }
+    }
+  }
+
+  drawCities(ctx, game, selection) {
     for (const city of game.cities) {
       const color = this.colorOf(city.owner);
       const r = CITY.radius;
@@ -270,7 +359,7 @@ export class Renderer {
         ctx.globalAlpha = 1;
       }
 
-      // A coloured disc with a dark rim; capitals carry a white star.
+      // Cities are pure economy: a small coloured disc with a dark rim.
       ctx.beginPath();
       ctx.arc(city.x, city.y, r, 0, Math.PI * 2);
       ctx.fillStyle = color;
@@ -280,26 +369,9 @@ export class Renderer {
       ctx.stroke();
 
       ctx.fillStyle = city.owner < 0 ? '#12161a' : '#ffffff';
-      if (city.capital) {
-        star(ctx, city.x, city.y, r * 0.66, r * 0.28);
-        ctx.fill();
-      } else {
-        ctx.beginPath();
-        ctx.arc(city.x, city.y, r * 0.34, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Production progress runs clockwise from the top.
-      if (city.owner >= 0 && !city.paused) {
-        const frac = Math.min(1, city.progress / city.buildTime());
-        if (frac > 0.001) {
-          ctx.beginPath();
-          ctx.arc(city.x, city.y, r + 6, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
-          ctx.strokeStyle = city.produce === 'heavy' ? '#12161a' : color;
-          ctx.lineWidth = city.produce === 'heavy' ? 4.5 : 3;
-          ctx.stroke();
-        }
-      }
+      ctx.beginPath();
+      ctx.arc(city.x, city.y, r * 0.34, 0, Math.PI * 2);
+      ctx.fill();
 
       if (city.captureProgress > 0.001 && city.captureBy >= 0) {
         ctx.beginPath();
@@ -322,26 +394,6 @@ export class Renderer {
         ctx.strokeStyle = '#12161a';
         ctx.lineWidth = 1;
         ctx.stroke();
-        if (city.rally) {
-          ctx.beginPath();
-          ctx.moveTo(city.x, city.y);
-          ctx.lineTo(city.rally.x, city.rally.y);
-          ctx.strokeStyle = color;
-          ctx.setLineDash([7, 6]);
-          ctx.lineWidth = 2;
-          ctx.stroke();
-          ctx.setLineDash([]);
-          ctx.beginPath();
-          ctx.arc(city.rally.x, city.rally.y, 6, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-      }
-
-      // Paused production gets a clear visual so it is never a mystery.
-      if (city.owner === viewerFaction && city.paused) {
-        ctx.fillStyle = '#12161a';
-        ctx.fillRect(city.x - 6, city.y - r - 18, 4, 11);
-        ctx.fillRect(city.x + 2, city.y - r - 18, 4, 11);
       }
     }
   }
@@ -366,12 +418,14 @@ export class Renderer {
     ctx.setLineDash([]);
   }
 
-  drawUnits(ctx, game, bounds, selection, hoverUnitId) {
+  drawUnits(ctx, game, bounds, selection, hoverUnitId, viewerFaction) {
     const pad = 30;
     for (const u of game.units) {
       if (u.x < bounds.left - pad || u.x > bounds.right + pad || u.y < bounds.top - pad || u.y > bounds.bottom + pad) {
         continue;
       }
+      // Cover hides units from everyone who has nobody close enough to spot them.
+      if (viewerFaction >= 0 && !game.isVisibleTo(u, viewerFaction)) continue;
       const color = this.colorOf(u.faction);
       const r = u.radius;
       const isSelected = selection.units.has(u.id);
@@ -413,12 +467,24 @@ export class Renderer {
         ctx.stroke();
       }
 
-      if (u.starving) {
+      // Shaken troops get a pale wedge; the lower the morale, the wider it is.
+      if (u.morale < 0.92) {
+        ctx.beginPath();
+        ctx.arc(u.x, u.y, r + 6, Math.PI / 2, Math.PI / 2 + (1 - u.morale) * Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      if (u.starving || !u.supplied) {
         const pulse = 0.5 + 0.5 * Math.sin(game.time * 6 + u.id);
         ctx.beginPath();
-        ctx.arc(u.x, u.y, r + 7, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(255,90,40,${0.35 + pulse * 0.5})`;
-        ctx.lineWidth = 2;
+        ctx.arc(u.x, u.y, r + 9, 0, Math.PI * 2);
+        // Encircled is the emergency; merely broke is a warning.
+        ctx.strokeStyle = u.supplied
+          ? `rgba(255,150,40,${0.3 + pulse * 0.45})`
+          : `rgba(255,40,40,${0.45 + pulse * 0.5})`;
+        ctx.lineWidth = u.supplied ? 2 : 3;
         ctx.stroke();
       }
     }
@@ -448,6 +514,14 @@ export class Renderer {
         ctx.strokeStyle = `rgba(${color},${k})`;
         ctx.lineWidth = 2.5;
         ctx.stroke();
+      } else if (e.kind === 'baseFall') {
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, BASE.radius + (1 - k) * 130, 0, Math.PI * 2);
+        ctx.strokeStyle = this.colorOf(e.faction);
+        ctx.globalAlpha = k;
+        ctx.lineWidth = 6;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
       } else if (e.kind === 'capture') {
         ctx.beginPath();
         ctx.arc(e.x, e.y, CITY.radius + (1 - k) * 70, 0, Math.PI * 2);
@@ -460,7 +534,7 @@ export class Renderer {
     }
   }
 
-  drawMinimap(game, camera) {
+  drawMinimap(game, camera, viewerFaction = -1) {
     const ctx = this.minimapCtx;
     if (!ctx || !this.minimapBase) return;
     const scale = this.minimapBase.width / game.terrain.width;
@@ -472,11 +546,23 @@ export class Renderer {
       ctx.strokeStyle = '#12161a';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.arc(c.x * scale, c.y * scale, 4, 0, Math.PI * 2);
+      ctx.arc(c.x * scale, c.y * scale, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    for (const b of game.bases) {
+      if (b.dead) continue;
+      ctx.fillStyle = this.colorOf(b.owner);
+      ctx.strokeStyle = '#12161a';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(b.x * scale, b.y * scale, 6, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
     for (const u of game.units) {
+      // Radar respects cover too.
+      if (viewerFaction >= 0 && !game.isVisibleTo(u, viewerFaction)) continue;
       ctx.fillStyle = this.colorOf(u.faction);
       const s = u.type === 'heavy' ? 3 : 2;
       ctx.fillRect(u.x * scale - s / 2, u.y * scale - s / 2, s, s);

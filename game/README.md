@@ -1,8 +1,9 @@
 # War of Dots
 
-A minimalist single-player real-time strategy game. Two unit types, cities that
-feed your army, and bots that fight back. No build, no dependencies, no assets —
-plain ES modules and a `<canvas>`.
+A minimalist single-player real-time strategy game: gold and logistics instead of
+resource gathering, morale, encirclement, and a front line that moves with your
+army. No build step, no dependencies, no art assets — plain ES modules and a
+`<canvas>`.
 
 ![Battle](screenshots/03-battle.png)
 
@@ -33,29 +34,54 @@ required for the test and tuning scripts below.
 
 ## The rules, in full
 
-* **Cities build units on their own.** You only choose *what* each city builds.
-* **Each city supports 5 units.** Go over the cap and your troops furthest from
-  a friendly city starve to death. Expansion is the only way to a bigger army.
-* **Capture a city** by standing inside its ring while no defender is there.
-  More units capture faster, up to four. Contest it and the progress bleeds away.
-* **Units inside a friendly city's ring heal.** Pull damaged troops back.
-* **You win** when every rival has no cities and no units left.
+* **You start with one base** (the big star) and a small purse of gold.
+* **You win** by destroying every enemy base, or by holding **75% of the map**.
+* **The black line is the front.** Territory belongs to whoever projects the most
+  control over it — bases reach furthest, cities less, individual units least —
+  so the line moves the moment an army moves.
+
+### Economy: logistics, not mining
+
+There are no workers and nothing to harvest.
+
+| | |
+|---|---|
+| Base | **+4 gold/s** |
+| Captured city | **+2 gold/s** |
+| Every unit in the field | **−1 gold/s** |
+| Unit garrisoned inside a city | **free** |
+
+Gold buys units directly (light 30, heavy 85) and production only starts once the
+unit is paid for. If upkeep outruns income the treasury goes negative and the
+whole field army **starves**, losing health until you take more cities or lose
+enough units. Cities pay twice over: income, plus free upkeep for whoever sits in
+them.
+
+### Morale
+
+Troops under sustained fire lose morale. At zero they move at 55% speed and deal
+45% damage — shaken before they are dead. Morale recovers out of contact, faster
+next to a friendly base or city.
+
+### Encirclement
+
+A unit is supplied if it can trace a route home through ground the enemy does not
+control. Cut that route and it is finished in about four seconds — surrounding an
+army kills it far faster than shooting it does. This falls straight out of the
+territory field, so it needs no separate bookkeeping.
 
 ### The two units
 
 | | Light | Heavy |
 |---|---|---|
-| HP | 42 | 165 |
-| Damage | 7.5/s | 27/s |
-| Range | 30 | 40 |
-| Speed | 68 | 44 |
-| Build time | 4.5s | 11s |
-| In rough terrain | 0.85× speed, **0.8× damage taken** | 0.42× speed, 0.35× damage, **1.35× damage taken** |
-
-Light wins through numbers and doesn't care about terrain — it even takes cover
-in the rough. Heavy is a battering ram that only works in the open: in forests it
-crawls, barely scratches anything, and dies fast. Heavies also path *around*
-rough ground rather than through it.
+| HP | 46 | 175 |
+| Damage | 8/s | 28/s |
+| Range | 32 | 42 |
+| Speed | 70 | 44 |
+| Cost | 30 | 85 |
+| Build time | 3.5s | 9s |
+| In rough ground | takes 20% less damage | deals 60% less, takes 30% more |
+| On plains | — | **+25% speed** |
 
 On screen: light is a plain dot, heavy wears a thick black ring.
 
@@ -63,19 +89,15 @@ On screen: light is a plain dot, heavy wears a thick black ring.
 
 | | Passable | Notes |
 |---|---|---|
-| Plains (light green) | yes | Open ground. Everything works, heavies best of all. |
-| Forest (dark green) | yes | Rough: heavies crawl and barely hurt anything, light takes cover. |
-| Hills (grey) | yes | Rough, and slightly slow for everyone. |
+| Plains (light green) | yes | Open ground. Heavy units move 25% faster here. |
+| Forest (dark green) | yes | **Conceals**: units in forest are invisible until an enemy comes within 95 units. Heavies barely fight in it. |
+| Hills (grey) | yes | Slow (0.7×), and heavies fight badly. |
+| Mountain (dark grey) | yes | Very slow (0.45×). Passable, but a genuine barrier. |
 | Water (blue) | **no** | Only crossable by bridge. |
-| Mountain (dark grey) | **no** | Solid. |
 | Road / bridge | yes | 1.35× / 1.25× marching speed. Pathing prefers them. |
 
-Roads are generated per map as a minimum spanning tree over the cities, and turn
-into bridges wherever they cross water.
-
-The black line on the map is the **front**: every point belongs to whoever owns
-the nearest city, and the line is the boundary between two owners. Cities are
-discs; a player's starting city is a star.
+Roads are generated per map as a minimum spanning tree over the map's points, and
+turn into bridges wherever they cross water.
 
 ## Controls
 
@@ -84,9 +106,9 @@ discs; a player's starting city is a star.
 | Left click / drag | Select · double-click selects all of that type on screen |
 | Right click | Move, or attack the unit under the cursor |
 | `A` | Attack-move · `S` stop · `H` hold · `Z` select whole army |
-| `Q` / `W` | Build light / heavy in the selected city · `E` pauses its production |
-| Right click with a city selected | Set its rally point |
-| `Tab` | Cycle your cities · `F` centre on selection · `Ctrl`+`1..9` control groups |
+| `Q` / `W` | Build light / heavy at the selected base · `E` pauses its production |
+| Right click with a base selected | Set its rally point |
+| `Tab` | Cycle your bases · `F` centre on selection · `Ctrl`+`1..9` control groups |
 | Arrows / screen edge / middle-drag | Pan · wheel to zoom · `Space` pause · `Esc` menu |
 
 ### On a phone
@@ -111,8 +133,8 @@ narrow screens, and the game pauses itself when the tab goes to the background.
   five hand-built maps.
 * **Bot skill** — Recruit, Officer, Marshal. The tiers are verified to actually
   rank (see below), not just labelled differently.
-* **Map editor** — paint plains, forest, hills, mountains and water, place
-  cities, save to local storage, play it.
+* **Map editor** — paint plains, forest, hills, mountains and water, place player
+  bases and neutral cities, save to local storage, play it.
 * **Replays** — every finished match is recorded and can be replayed, scrubbed
   and re-watched. The simulation is deterministic, so a replay is just the seed
   plus the command log.
@@ -125,15 +147,15 @@ game/
   style.css
   src/
     config.js         all balance numbers and the terrain table live here
-    game.js           the simulation: combat, capture, supply, production
+    game.js           the simulation: economy, combat, morale, supply, victory
+    influence.js      territory, front lines and encirclement, from one field
     ai.js             bot controller — issues the same commands a human does
     pathfinder.js     A* over the terrain grid, with per-unit-type terrain costs
     terrain.js        terrain grid, blob generation, roads, run-length encoding
     contour.js        cell grid -> smooth outlines (terrain shapes, front lines)
-    territory.js      who owns which ground, and the border between owners
     menu-demo.js      the live bot match behind the title screen
     maps.js           the built-in maps
-    entities.js       Unit and City
+    entities.js       Unit, Base and City
     session.js        one match: loop, camera, HUD, result
     input.js          mouse, keyboard and touch
     render.js         canvas drawing, baked terrain, minimap
@@ -163,13 +185,22 @@ npm install -D playwright && npx playwright install chromium
 ```
 
 ```bash
-npm test            # headless smoke test: 24 checks incl. replay determinism
+npm test            # headless checks incl. replay determinism and every rule below
 npm run shots       # the same run, writing screenshots/
 npm run balance     # bot-vs-bot matches: match length + difficulty ordering
+npm run diagnose    # one match, printed as a timeline: gold, army, land, base HP
 npm run tune        # A/B one AI parameter at a time against a baseline
 npm run tune:units  # heavy-leaning bot vs all-light bot, same tactics
 npm run build       # dist/war-of-dots.zip, ready to upload
 ```
+
+`diagnose.mjs` is the one to reach for when matches feel wrong rather than
+merely unbalanced — it prints a 30-second-interval timeline of both economies,
+army sizes, territory and base health, which makes a stalemate's cause obvious.
+It has already paid for itself: the first build of these rules produced 60
+timed-out matches out of 60, and the timeline showed why in one glance — base
+health sat at a full 1600 for ten minutes straight, so nobody had ever attacked
+one, and territory was frozen because unit influence could not shift it.
 
 `tune.mjs` and `tune-units.mjs` are how the current numbers were arrived at, and
 they have earned their keep twice:
@@ -182,8 +213,16 @@ they have earned their keep twice:
   advantage) and heavies fell back to 28%. The tiers had quietly collapsed to
   hard-beats-normal 60% before the sweep caught it.
 
-Neither regression was visible from reading the code. Re-run `npm run tune` and
-`npm run tune:units` after any change to terrain, unit stats or maps.
+A third came with the logistics rules: because a unit's influence did not stack,
+ten soldiers claimed no more ground than one, so any army that stepped onto enemy
+territory was instantly "encircled" and died in four seconds. Attacking was
+literally impossible, and every match ran to the time limit. Units now accumulate
+influence per cell, so a massed army out-projects a base and takes the ground it
+stands on.
+
+None of these were visible from reading the code. Re-run `npm run tune` and
+`npm run tune:units` after any change to terrain, unit stats or maps, and
+`npm run diagnose` whenever matches stop ending.
 
 Current state: hard beats normal 22/30, hard beats easy 28/30, normal beats easy
 27/30, and a heavy-leaning bot beats an all-light bot 56% of the time.

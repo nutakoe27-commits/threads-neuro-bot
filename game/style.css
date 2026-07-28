@@ -241,7 +241,9 @@ input[type="range"] { accent-color: var(--accent); }
 }
 .stat-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
 .stat-value { font-variant-numeric: tabular-nums; font-weight: 600; }
-.stat.warn .stat-value { color: #ff9066; }
+.stat-sub { font-variant-numeric: tabular-nums; font-size: 11px; color: var(--muted); }
+.stat.warn .stat-value, .stat.warn .stat-sub { color: #ff9066; }
+.stat.good .stat-sub { color: #7fdb96; }
 
 .hud-factions { top: 52px; left: 10px; flex-direction: column; align-items: flex-start; gap: 4px; }
 .faction-row {

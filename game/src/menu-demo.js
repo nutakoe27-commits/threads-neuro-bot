@@ -14,7 +14,7 @@ export class MenuDemo {
     this.canvas = document.getElementById(canvasId);
     this.renderer = new Renderer(this.canvas, null);
     this.running = false;
-    this.emptySelection = { units: new Set(), cityId: -1 };
+    this.emptySelection = { units: new Set(), cityId: -1, baseId: -1 };
   }
 
   reset() {

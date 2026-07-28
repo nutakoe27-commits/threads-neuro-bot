@@ -111,7 +111,7 @@ export class MapEditor {
     if (this.tool === 'city') {
       if (!isClick) return;
       if (this.cities.some((c) => Math.hypot(c.x - x, c.y - y) < CITY.captureRadius * 1.2)) {
-        this.app.flashGlobal('Too close to another city');
+        this.app.flashGlobal('Too close to another point');
         return;
       }
       this.cities.push({ x: Math.round(x), y: Math.round(y), slot: this.owner });
@@ -198,8 +198,8 @@ export class MapEditor {
 
   validate() {
     const slots = new Set(this.cities.filter((c) => c.slot >= 0).map((c) => c.slot));
-    if (slots.size < 2) return 'Place starting cities for at least two players.';
-    if (this.cities.length < 4) return 'A map needs at least four cities to be worth fighting over.';
+    if (slots.size < 2) return 'Place starting bases for at least two players.';
+    if (this.cities.length < 4) return 'A map needs at least four points to be worth fighting over.';
     return null;
   }
 

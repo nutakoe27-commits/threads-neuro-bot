@@ -38,25 +38,25 @@ const browser = await chromium.launch();
 const page = await browser.newPage();
 await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle' });
 
-const BASE = { think: 0.8, wave: 8, defenders: 2, retreatHp: 0.15, heavyRatio: 0.25, focus: 0.6 };
+const BASE = { think: 0.8, wave: 8, defenders: 2, retreatHp: 0.15, heavyRatio: 0.3, focus: 0.7, reserve: 40 };
 
 const variants = [
   ['baseline', {}],
-  ['wave 4', { wave: 4 }],
-  ['wave 6', { wave: 6 }],
-  ['wave 11', { wave: 11 }],
-  ['wave 15', { wave: 15 }],
-  ['wave 20', { wave: 20 }],
   ['think 0.4', { think: 0.4 }],
   ['think 1.6', { think: 1.6 }],
+  ['wave 4', { wave: 4 }],
+  ['wave 12', { wave: 12 }],
+  ['wave 18', { wave: 18 }],
+  ['defenders 0', { defenders: 0 }],
+  ['defenders 4', { defenders: 4 }],
   ['no retreat', { retreatHp: 0 }],
   ['retreat 0.35', { retreatHp: 0.35 }],
   ['all light', { heavyRatio: 0 }],
-  ['heavy 0.45', { heavyRatio: 0.45 }],
-  ['focus 0.1', { focus: 0.1 }],
+  ['heavy 0.55', { heavyRatio: 0.55 }],
+  ['focus 0.2', { focus: 0.2 }],
   ['focus 1.2', { focus: 1.2 }],
-  ['defenders 0', { defenders: 0 }],
-  ['defenders 4', { defenders: 4 }],
+  ['reserve 0', { reserve: 0 }],
+  ['reserve 150', { reserve: 150 }],
 ];
 
 const out = await page.evaluate(

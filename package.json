@@ -2,7 +2,7 @@
   "name": "war-of-dots",
   "version": "1.0.0",
   "private": true,
-  "description": "War of Dots — a minimalist single-player real-time strategy game",
+  "description": "War of Dots \u2014 a minimalist single-player real-time strategy game",
   "type": "module",
   "scripts": {
     "start": "npx --yes serve game -l 8080",
@@ -11,6 +11,7 @@
     "balance": "node scripts/balance.mjs",
     "tune": "node scripts/tune.mjs",
     "tune:units": "node scripts/tune-units.mjs",
-    "build": "bash scripts/build.sh"
+    "build": "bash scripts/build.sh",
+    "diagnose": "node scripts/diagnose.mjs"
   }
 }

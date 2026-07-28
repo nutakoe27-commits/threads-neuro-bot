@@ -1,4 +1,4 @@
-import { CITY } from './config.js';
+import { CITY, BASE } from './config.js';
 
 const EDGE = 24;
 const EDGE_SPEED = 900;
@@ -11,7 +11,7 @@ export class InputController {
     this.camera = camera;
     this.session = session;
 
-    this.selection = { units: new Set(), cityId: -1 };
+    this.selection = { units: new Set(), cityId: -1, baseId: -1 };
     this.groups = new Map();
     this.selectionBox = null;
     this.hoverUnitId = -1;
@@ -102,7 +102,15 @@ export class InputController {
 
   cityAt(worldX, worldY) {
     for (const c of this.game.cities) {
-      if (Math.hypot(c.x - worldX, c.y - worldY) <= CITY.radius + 6) return c;
+      if (Math.hypot(c.x - worldX, c.y - worldY) <= CITY.radius + 8) return c;
+    }
+    return null;
+  }
+
+  baseAt(worldX, worldY) {
+    for (const b of this.game.bases) {
+      if (b.dead) continue;
+      if (Math.hypot(b.x - worldX, b.y - worldY) <= BASE.radius + 8) return b;
     }
     return null;
   }
@@ -189,7 +197,10 @@ export class InputController {
       if (u.faction !== this.faction) continue;
       if (u.x >= a.x && u.x <= b.x && u.y >= a.y && u.y <= b.y) this.selection.units.add(u.id);
     }
-    if (this.selection.units.size) this.selection.cityId = -1;
+    if (this.selection.units.size) {
+      this.selection.cityId = -1;
+      this.selection.baseId = -1;
+    }
     this.session.onSelectionChanged();
   }
 
@@ -216,6 +227,15 @@ export class InputController {
         this.selection.units.add(unit.id);
       }
       this.selection.cityId = -1;
+      this.selection.baseId = -1;
+      this.session.onSelectionChanged();
+      return;
+    }
+
+    const base = this.baseAt(world.x, world.y);
+    if (base) {
+      this.clearSelection();
+      this.selection.baseId = base.id;
       this.session.onSelectionChanged();
       return;
     }
@@ -237,14 +257,15 @@ export class InputController {
   clearSelection() {
     this.selection.units.clear();
     this.selection.cityId = -1;
+    this.selection.baseId = -1;
   }
 
   // Right click (or touch command tap): attack a target, or move.
   commandAt(worldX, worldY, forceAttackMove) {
     if (!this.enabled) return;
-    const city = this.selection.cityId >= 0 ? this.game.cities[this.selection.cityId] : null;
-    if (city && city.owner === this.faction && !this.selection.units.size) {
-      this.game.issue({ type: 'rally', faction: this.faction, city: city.id, x: worldX, y: worldY });
+    const base = this.selection.baseId >= 0 ? this.game.bases[this.selection.baseId] : null;
+    if (base && base.owner === this.faction && !this.selection.units.size) {
+      this.game.issue({ type: 'rally', faction: this.faction, base: base.id, x: worldX, y: worldY });
       this.session.flash('Rally point set');
       return;
     }
@@ -257,6 +278,20 @@ export class InputController {
         faction: this.faction,
         units: [...this.selection.units],
         target: target.id,
+        targetKind: 'unit',
+      });
+      return;
+    }
+
+    const enemyBase = this.baseAt(worldX, worldY);
+    if (enemyBase && enemyBase.owner >= 0 && !this.game.areAllied(enemyBase.owner, this.faction)
+        && enemyBase.owner !== this.faction) {
+      this.game.issue({
+        type: 'attack',
+        faction: this.faction,
+        units: [...this.selection.units],
+        target: enemyBase.id,
+        targetKind: 'base',
       });
       return;
     }
@@ -340,8 +375,8 @@ export class InputController {
         this.setProduction('heavy');
         break;
       case 'KeyE':
-        if (this.enabled && this.selection.cityId >= 0) {
-          this.game.issue({ type: 'togglePause', faction: this.faction, city: this.selection.cityId });
+        if (this.enabled && this.selection.baseId >= 0) {
+          this.game.issue({ type: 'togglePause', faction: this.faction, base: this.selection.baseId });
         }
         break;
       case 'KeyF':
@@ -370,10 +405,10 @@ export class InputController {
   }
 
   setProduction(type) {
-    if (!this.enabled || this.selection.cityId < 0) return;
-    const city = this.game.cities[this.selection.cityId];
-    if (!city || city.owner !== this.faction) return;
-    this.game.issue({ type: 'produce', faction: this.faction, city: city.id, unitType: type });
+    if (!this.enabled || this.selection.baseId < 0) return;
+    const base = this.game.bases[this.selection.baseId];
+    if (!base || base.dead || base.owner !== this.faction) return;
+    this.game.issue({ type: 'produce', faction: this.faction, base: base.id, unitType: type });
   }
 
   selectAllArmy() {
@@ -383,6 +418,11 @@ export class InputController {
   }
 
   centerOnSelection() {
+    if (this.selection.baseId >= 0) {
+      const b = this.game.bases[this.selection.baseId];
+      this.camera.centerOn(b.x, b.y);
+      return;
+    }
     if (this.selection.cityId >= 0) {
       const c = this.game.cities[this.selection.cityId];
       this.camera.centerOn(c.x, c.y);
@@ -403,12 +443,12 @@ export class InputController {
   }
 
   cycleCities() {
-    const mine = this.game.cities.filter((c) => c.owner === this.faction);
+    const mine = this.game.bases.filter((b) => !b.dead && b.owner === this.faction);
     if (!mine.length) return;
-    const idx = mine.findIndex((c) => c.id === this.selection.cityId);
+    const idx = mine.findIndex((b) => b.id === this.selection.baseId);
     const next = mine[(idx + 1) % mine.length];
     this.clearSelection();
-    this.selection.cityId = next.id;
+    this.selection.baseId = next.id;
     this.camera.centerOn(next.x, next.y);
     this.session.onSelectionChanged();
   }
@@ -504,6 +544,7 @@ export class InputController {
       const held = performance.now() - rec.time > 450;
 
       const unit = this.unitAt(world.x, world.y, 12);
+      const base = this.baseAt(world.x, world.y);
       const city = this.cityAt(world.x, world.y);
 
       // Long press, or the armed Attack button, makes the order an attack-move.
@@ -517,6 +558,12 @@ export class InputController {
       if (unit && unit.faction === this.faction) {
         this.clearSelection();
         this.selection.units.add(unit.id);
+        this.session.onSelectionChanged();
+        continue;
+      }
+      if (base && base.owner === this.faction && !this.selection.units.size) {
+        this.clearSelection();
+        this.selection.baseId = base.id;
         this.session.onSelectionChanged();
         continue;
       }

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-<meta name="description" content="War of Dots — a minimalist real-time strategy game. Two unit types, cities that feed your army, and bots that fight back." />
+<meta name="description" content="War of Dots — a minimalist real-time strategy game. Gold, logistics, morale and encirclement, against bots that fight back." />
 <meta name="theme-color" content="#0b0e13" />
 <title>War of Dots</title>
 <link rel="stylesheet" href="./style.css" />
@@ -22,7 +22,7 @@
         <span class="mark"><i class="pip light"></i><i class="pip heavy"></i></span>
         WAR OF DOTS
       </h1>
-      <p class="tagline">Two units. Cities that feed them. Nothing else in your way.</p>
+      <p class="tagline">Two units, one purse, and a front line that moves with your army.</p>
       <nav class="menu">
         <button class="btn primary" data-action="goto-setup">Skirmish</button>
         <button class="btn" data-action="goto-replays">Replays</button>
@@ -81,8 +81,9 @@
     <canvas id="game-canvas" tabindex="0"></canvas>
 
     <div class="hud hud-top">
-      <div class="stat" id="stat-supply" title="Units / supported by your cities"><span class="stat-label">Supply</span><span class="stat-value">0/0</span></div>
-      <div class="stat" id="stat-cities"><span class="stat-label">Cities</span><span class="stat-value">0</span></div>
+      <div class="stat" id="stat-gold" title="Gold, and net income per second"><span class="stat-label">Gold</span><span class="stat-value">0</span><span class="stat-sub">+0</span></div>
+      <div class="stat" id="stat-territory" title="Hold 75% of the map to win"><span class="stat-label">Land</span><span class="stat-value">0%</span></div>
+      <div class="stat" id="stat-bases" title="Lose every base and you lose the match"><span class="stat-label">Bases</span><span class="stat-value">0</span></div>
       <div class="stat" id="stat-army"><span class="stat-label">Army</span><span class="stat-value">0</span></div>
       <div class="spacer"></div>
       <div class="stat" id="stat-clock"><span class="stat-label">Time</span><span class="stat-value">0:00</span></div>
@@ -133,21 +134,21 @@
         <button class="btn small tool" data-tool="hills">Hills</button>
         <button class="btn small tool" data-tool="mountain">Mountain</button>
         <button class="btn small tool" data-tool="water">Water</button>
-        <button class="btn small tool" data-tool="city">City</button>
-        <button class="btn small tool" data-tool="erase">Erase city</button>
+        <button class="btn small tool" data-tool="city">Place point</button>
+        <button class="btn small tool" data-tool="erase">Erase point</button>
       </div>
       <div class="field inline">
         <label for="editor-brush">Brush</label>
         <input type="range" id="editor-brush" min="20" max="220" value="70" />
       </div>
       <div class="field inline">
-        <label for="editor-owner">City owner</label>
+        <label for="editor-owner">Point type</label>
         <select id="editor-owner">
-          <option value="-1">Neutral</option>
-          <option value="0">Player 1</option>
-          <option value="1">Player 2</option>
-          <option value="2">Player 3</option>
-          <option value="3">Player 4</option>
+          <option value="-1">Neutral city</option>
+          <option value="0">Player 1 base</option>
+          <option value="1">Player 2 base</option>
+          <option value="2">Player 3 base</option>
+          <option value="3">Player 4 base</option>
         </select>
       </div>
       <div class="spacer"></div>
@@ -157,7 +158,7 @@
       <button class="btn small primary" data-action="editor-play">Play</button>
     </div>
     <div class="hud hud-bottom">
-      <div class="editor-help">Paint terrain with the left mouse button. Place at least two player cities on different slots.</div>
+      <div class="editor-help">Paint terrain with the left mouse button. Place at least two player bases on different slots.</div>
       <div class="saved-maps" id="editor-saved"></div>
     </div>
   </section>
@@ -181,29 +182,26 @@
       <h2>How to Play</h2>
       <div class="help-grid">
         <section>
-          <h3>The whole game in four lines</h3>
+          <h3>How a match is won</h3>
           <ul>
-            <li>Cities build units by themselves. You choose <em>what</em> they build.</li>
-            <li>Each city supports <strong>5</strong> units. Go over the cap and your furthest troops starve.</li>
-            <li>Stand next to an undefended city to capture it. More cities, more army.</li>
-            <li>Kill everything the enemy owns, or take every city, and the battle is yours.</li>
+            <li>You start with one <strong>base</strong> (the big star) and a small purse of gold.</li>
+            <li>Win by destroying <strong>every enemy base</strong>, or by holding <strong>75% of the map</strong>.</li>
+            <li>The black line is the front. It follows your units, so it moves as they do.</li>
           </ul>
         </section>
         <section>
-          <h3>The ground</h3>
-          <ul class="legend">
-            <li><span class="swatch" style="background:#a5c93c"></span><strong>Plains</strong> — open. Everything works here, heavies best of all.</li>
-            <li><span class="swatch" style="background:#2f7d32"></span><strong>Forest</strong> — passable, but heavies crawl and barely hurt anything. Light infantry takes cover here.</li>
-            <li><span class="swatch" style="background:#939f9f"></span><strong>Hills</strong> — same penalty as forest, slightly slow for everyone.</li>
-            <li><span class="swatch" style="background:#3fa9f5"></span><strong>Water</strong> and <span class="swatch" style="background:#6f7479"></span><strong>mountains</strong> — impassable. Nothing crosses except by bridge.</li>
-            <li><span class="swatch" style="background:#b5b5b0"></span><strong>Roads</strong> and <span class="swatch" style="background:#8a5a2b"></span><strong>bridges</strong> — faster marching, and the only way over water.</li>
+          <h3>Gold, not workers</h3>
+          <ul>
+            <li>Bases pay <strong>+4 gold/s</strong>, captured cities <strong>+2 gold/s</strong>. Nobody mines anything.</li>
+            <li>Every unit in the field costs <strong>1 gold/s</strong> to keep. Units garrisoned <strong>inside a city</strong> are fed for free — that is what makes cities worth taking twice over.</li>
+            <li>Spend gold to build: light 30, heavy 85.</li>
+            <li>If upkeep outruns income your gold goes negative and the army <strong>starves</strong>. Take cities or shrink the army.</li>
           </ul>
-          <p class="touch-note">The black line is the front: everything inside it is fed by your cities.</p>
         </section>
         <section>
-          <h3>Units</h3>
-          <p><span class="pip light"></span><strong>Light</strong> — cheap and quick, fine in any terrain, and it even takes cover in rough ground. Wins through numbers.</p>
-          <p><span class="pip heavy"></span><strong>Heavy</strong> — slow, expensive, brutal in the open. In forests it crawls and barely scratches anything. Use it to break lines and to hold clear ground.</p>
+          <h3>Morale and encirclement</h3>
+          <p>Troops under sustained fire lose <strong>morale</strong>: they slow down and hit softer. Pull them back behind a base or city and they recover.</p>
+          <p>Cut a squad off from its own territory and it loses supply. <strong>Surrounded units die in seconds</strong> — encirclement kills faster than shooting.</p>
         </section>
         <section>
           <h3>Controls</h3>
@@ -211,9 +209,9 @@
             <li><kbd>LMB</kbd> select · drag to box-select · double-click for all of that type</li>
             <li><kbd>RMB</kbd> move, or attack the unit under the cursor</li>
             <li><kbd>A</kbd> attack-move · <kbd>S</kbd> stop · <kbd>H</kbd> hold · <kbd>Z</kbd> select whole army</li>
-            <li><kbd>Q</kbd>/<kbd>W</kbd> build light/heavy in the selected city · <kbd>E</kbd> pause its production</li>
-            <li>Select a city, then <kbd>RMB</kbd> on the map to set its rally point</li>
-            <li><kbd>Tab</kbd> cycle cities · <kbd>F</kbd> centre on selection · <kbd>Ctrl</kbd>+<kbd>1..9</kbd> groups</li>
+            <li><kbd>Q</kbd>/<kbd>W</kbd> build light/heavy at the selected base · <kbd>E</kbd> pause its production</li>
+            <li>Select a base, then <kbd>RMB</kbd> on the map to set its rally point</li>
+            <li><kbd>Tab</kbd> cycle bases · <kbd>F</kbd> centre on selection · <kbd>Ctrl</kbd>+<kbd>1..9</kbd> groups</li>
             <li>Arrows / screen edge / middle-drag to pan · wheel to zoom · <kbd>Space</kbd> pause</li>
           </ul>
           <p class="touch-note">

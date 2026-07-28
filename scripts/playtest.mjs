@@ -83,12 +83,19 @@ const state = (page) =>
       byFaction: g.factions.map((f) => ({
         index: f.index,
         alive: f.alive,
+        bases: g.countBases(f.index),
         cities: g.countCities(f.index),
         units: g.countUnits(f.index),
+        gold: Math.round(f.gold),
+        income: f.income,
+        upkeep: f.upkeep,
+        territory: g.territoryShare(f.index),
         produced: f.produced,
         killed: f.killed,
         captured: f.captured,
       })),
+      cutOff: g.units.filter((u) => !u.supplied).length,
+      shaken: g.units.filter((u) => u.morale < 0.9).length,
       neutralCities: g.cities.filter((c) => c.owner < 0).length,
       onImpassable: g.units.filter((u) => !g.terrain.isPassable(u.x, u.y)).length,
       starving: g.units.filter((u) => u.starving).length,
@@ -127,8 +134,10 @@ async function main() {
   await page.waitForTimeout(500);
 
   let s = await state(page);
-  check('match started', !!s && s.units === 6, `units=${s?.units}`);
-  check('cities split 1/1/rest neutral', s.byFaction[0].cities === 1 && s.byFaction[1].cities === 1);
+  check('match started', !!s && s.units === 4, `units=${s?.units}`);
+  check('one base each', s.byFaction[0].bases === 1 && s.byFaction[1].bases === 1);
+  check('every other point is a neutral city', s.byFaction[0].cities === 0 && s.byFaction[1].cities === 0);
+  check('starting gold granted', s.byFaction[0].gold > 0, `gold=${s.byFaction[0].gold}`);
   // Regression guard: the opening zoom was once computed while the game screen
   // was still hidden, which silently opened every match fully zoomed out.
   check('opens at a sane zoom', await page.evaluate(() => {
@@ -142,7 +151,11 @@ async function main() {
   await runMatch(page, 6, 4);
   s = await state(page);
   check('simulation advanced', s.time > 15, `t=${s.time?.toFixed(1)}s`);
-  check('cities produced units', s.byFaction[0].produced > 3, `produced=${s.byFaction[0].produced}`);
+  check('bases produced units', s.byFaction[0].produced > 2, `produced=${s.byFaction[0].produced}`);
+  check('bases generate income', s.byFaction[0].income >= 4, `income=${s.byFaction[0].income}`);
+  check('field units cost upkeep', s.byFaction[0].upkeep > 0, `upkeep=${s.byFaction[0].upkeep}`);
+  check('territory is measured', s.byFaction[0].territory > 0 && s.byFaction[0].territory < 1,
+    `land=${s.byFaction[0].territory}`);
   check('bot issued commands', s.commands > 0, `commands=${s.commands}`);
 
   // Drive the human side: select the whole army and attack-move at the middle.
@@ -183,12 +196,13 @@ async function main() {
   // City panel + production switch.
   await page.keyboard.press('Tab');
   await page.waitForTimeout(200);
-  check('city panel opens', await page.isVisible('#selection-panel.visible'));
+  check('base panel opens', await page.isVisible('#selection-panel.visible'));
+  check('Tab selects a base', await page.evaluate(() => window.warOfDots.session.input.selection.baseId >= 0));
   await page.keyboard.press('KeyW');
   await page.waitForTimeout(200); // commands land on the next simulation tick
   const producing = await page.evaluate(() => {
     const s = window.warOfDots.session;
-    return s.game.cities[s.input.selection.cityId].produce;
+    return s.game.bases[s.input.selection.baseId].produce;
   });
   check('production switched to heavy', producing === 'heavy');
   await shot(page, '03-battle');
@@ -199,7 +213,7 @@ async function main() {
   check('heavies were built', await page.evaluate(() => window.warOfDots.session.game.units.some((u) => u.type === 'heavy')));
   check('combat happened', s.byFaction[0].killed + s.byFaction[1].killed > 0,
     `kills=${s.byFaction[0].killed}/${s.byFaction[1].killed}`);
-  check('supply pressure exists', s.byFaction.some((f) => f.cities > 1), 'no expansion at all');
+  check('cities changed hands', s.byFaction.some((f) => f.captured > 0), 'nobody captured anything');
   check('no runaway unit count', s.units < 400, `units=${s.units}`);
   check('nothing walks through water or mountains', s.onImpassable === 0, `stuck in solid=${s.onImpassable}`);
 
@@ -235,6 +249,148 @@ async function main() {
   check('editor paints terrain', await page.evaluate(() => window.warOfDots.editor.terrain.cells.some((c) => c !== 0)));
   await shot(page, '06-editor');
   await page.evaluate(() => window.warOfDots.closeEditor());
+
+  // Dedicated tests for the new rules, run against fresh simulations so each
+  // mechanic is checked in isolation rather than hoped for during a live match.
+  console.log('mechanics');
+  const mechanics = await page.evaluate(async () => {
+    const { Game } = await import('./src/game.js');
+    const { getMap } = await import('./src/maps.js');
+    const { TERRAIN } = await import('./src/config.js');
+    const results = [];
+    const t = (name, pass, detail = '') => results.push({ name, pass: !!pass, detail: String(detail) });
+
+    const fresh = () =>
+      new Game({
+        map: getMap('duel'),
+        seed: 4242,
+        slots: [
+          { kind: 'human', team: 0, difficulty: 'normal' },
+          { kind: 'ai', team: 1, difficulty: 'normal' },
+        ],
+      });
+
+    // --- forest conceals ---
+    {
+      const g = fresh();
+      // Find a forest cell and drop one unit of each side far apart.
+      let spot = null;
+      for (let cy = 0; cy < g.terrain.rows && !spot; cy++) {
+        for (let cx = 0; cx < g.terrain.cols; cx++) {
+          if (g.terrain.atCell(cx, cy) === TERRAIN.FOREST) {
+            spot = { x: cx * 20 + 10, y: cy * 20 + 10 };
+            break;
+          }
+        }
+      }
+      g.units.length = 0;
+      g.unitsById.clear();
+      const hider = g.spawnUnit(0, 'light', spot.x, spot.y);
+      const seeker = g.spawnUnit(1, 'light', spot.x + 400, spot.y);
+      g.step();
+      t('forest hides a unit from a distant enemy', !g.isVisibleTo(hider, 1));
+      t('a hidden unit still sees itself', g.isVisibleTo(hider, 0));
+      t('open ground hides nobody', g.isVisibleTo(seeker, 0));
+      seeker.x = spot.x + 60;
+      g.step();
+      t('walking close spots the hider', g.isVisibleTo(hider, 1));
+    }
+
+    // --- encirclement ---
+    {
+      const g = fresh();
+      const enemyBase = g.bases.find((b) => b.owner === 1);
+      g.units.length = 0;
+      g.unitsById.clear();
+      // One lone unit next to the enemy base, ringed by enemies: no way home.
+      const trapped = g.spawnUnit(0, 'light', enemyBase.x + 60, enemyBase.y);
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        g.spawnUnit(1, 'light', enemyBase.x + 60 + Math.cos(a) * 90, enemyBase.y + Math.sin(a) * 90);
+      }
+      for (let i = 0; i < 30; i++) g.step();
+      t('a surrounded unit loses supply', !trapped.supplied);
+      const hpBefore = trapped.hp;
+      for (let i = 0; i < 60 * 5; i++) g.step();
+      t('encircled units die within seconds', trapped.dead, `hp ${hpBefore.toFixed(0)} -> ${trapped.hp.toFixed(0)}`);
+
+      const home = fresh();
+      const ownBase = home.bases.find((b) => b.owner === 0);
+      home.units.length = 0;
+      home.unitsById.clear();
+      const safe = home.spawnUnit(0, 'light', ownBase.x + 40, ownBase.y);
+      for (let i = 0; i < 30; i++) home.step();
+      t('a unit at home stays supplied', safe.supplied);
+    }
+
+    // --- economy ---
+    {
+      const g = fresh();
+      g.units.length = 0;
+      g.unitsById.clear();
+      const f = g.factions[0];
+      // Pause the factory, otherwise the base spends the very gold we measure.
+      for (const b of g.bases) b.paused = true;
+      const before = f.gold;
+      for (let i = 0; i < 60; i++) g.step();
+      t('an army-free faction banks its income', f.gold > before, `${before} -> ${f.gold.toFixed(0)}`);
+
+      // Far more units than the treasury can feed.
+      const g2 = fresh();
+      const b2 = g2.bases.find((b) => b.owner === 0);
+      g2.factions[0].gold = 0;
+      for (let i = 0; i < 40; i++) g2.spawnUnit(0, 'light', b2.x + 200 + i * 3, b2.y + 200);
+      for (let i = 0; i < 30; i++) g2.step();
+      t('upkeep outruns income', g2.factions[0].upkeep > g2.factions[0].income,
+        `${g2.factions[0].upkeep} vs ${g2.factions[0].income}`);
+      t('the treasury goes negative', g2.factions[0].gold < 0, g2.factions[0].gold.toFixed(1));
+      t('unpaid troops starve', g2.units.some((u) => u.starving && u.hp < u.maxHp));
+    }
+
+    // --- morale ---
+    {
+      const g = fresh();
+      g.units.length = 0;
+      g.unitsById.clear();
+      const a = g.spawnUnit(0, 'light', 900, 600);
+      const b = g.spawnUnit(1, 'heavy', 925, 600);
+      for (let i = 0; i < 60; i++) g.step();
+      t('sustained fire breaks morale', a.morale < 0.9, a.morale.toFixed(2));
+      // Compare like for like: same tile, only morale differs.
+      const shakenSpeed = g.speedFactor(a);
+      const wasMorale = a.morale;
+      a.morale = 1;
+      const freshSpeed = g.speedFactor(a);
+      a.morale = wasMorale;
+      t('low morale slows a unit', shakenSpeed < freshSpeed, `${shakenSpeed.toFixed(2)} vs ${freshSpeed.toFixed(2)}`);
+      const shaken = a.morale;
+      b.dead = true;
+      g.cleanup();
+      for (let i = 0; i < 60 * 6; i++) g.step();
+      t('morale recovers out of contact', a.dead || a.morale > shaken, `${shaken.toFixed(2)} -> ${a.morale.toFixed(2)}`);
+    }
+
+    // --- victory ---
+    {
+      const g = fresh();
+      for (const base of g.bases) if (base.owner === 1) g.destroyBase(base, 0);
+      g.checkVictory();
+      t('razing every enemy base wins', g.over && g.winnerTeam === 0, `winner=${g.winnerTeam}`);
+
+      const g2 = fresh();
+      g2.influence.shareForTeam = (team) => (team === 0 ? 0.8 : 0.2);
+      g2.checkVictory();
+      t('holding 75% of the map wins', g2.over && g2.winnerTeam === 0, `winner=${g2.winnerTeam}`);
+
+      const g3 = fresh();
+      g3.influence.shareForTeam = (team) => (team === 0 ? 0.6 : 0.4);
+      g3.checkVictory();
+      t('60% is not enough to win', !g3.over);
+    }
+
+    return results;
+  });
+  for (const m of mechanics) check(m.name, m.pass, m.detail);
 
   // A short match played to completion, then replayed.
   console.log('replay determinism');

@@ -16,10 +16,9 @@ export class AIController {
     // simulation's random stream, and replays run without any AI at all —
     // that difference alone is enough to desync a whole match.
     this.rng = makeRng((game.seed ^ ((faction + 1) * 0x9e3779b9)) >>> 0);
-    // Stagger the first think so bots do not all fire on the same tick.
     this.timer = this.profile.think * (0.2 + 0.6 * this.rng());
-    this.lastOrder = new Map(); // unitId -> {x, y}
-    this.stagingCityId = -1;
+    this.lastOrder = new Map();
+    this.wantHeavy = false;
   }
 
   update(dt) {
@@ -29,19 +28,30 @@ export class AIController {
     this.think();
   }
 
+  get me() {
+    return this.game.factions[this.faction];
+  }
+
   myUnits() {
     return this.game.units.filter((u) => !u.dead && u.faction === this.faction);
+  }
+
+  myBases() {
+    return this.game.bases.filter((b) => !b.dead && b.owner === this.faction);
   }
 
   myCities() {
     return this.game.cities.filter((c) => c.owner === this.faction);
   }
 
-  enemyOf(faction) {
-    return faction >= 0 && !this.game.areAllied(faction, this.faction);
+  homePoints() {
+    return [...this.myBases(), ...this.myCities()];
   }
 
-  // Avoid re-issuing an order that barely changes anything.
+  enemyOf(faction) {
+    return faction >= 0 && !this.game.areAllied(faction, this.faction) && faction !== this.faction;
+  }
+
   send(units, x, y, attackMove = true) {
     const ids = [];
     for (const u of units) {
@@ -57,30 +67,39 @@ export class AIController {
   think() {
     const game = this.game;
     const units = this.myUnits();
-    const cities = this.myCities();
-    if (!cities.length && !units.length) return;
+    const bases = this.myBases();
+    if (!bases.length && !units.length) return;
 
-    this.manageProduction(cities, units);
+    this.manageProduction(bases, units);
     if (!units.length) return;
 
     const assigned = new Set();
 
-    // 1. Defence: cities with enemies nearby pull the closest troops home.
-    for (const city of cities) {
+    // 0. Anything encircled runs for home before it bleeds out.
+    for (const u of units) {
+      if (u.supplied) continue;
+      const home = this.nearestHome(u);
+      if (!home) continue;
+      assigned.add(u.id);
+      this.send([u], home.x, home.y);
+    }
+
+    // 1. Defence: threatened bases and cities pull the closest troops back.
+    for (const point of this.homePoints()) {
       const threat = game.units.filter(
-        (u) => !u.dead && this.enemyOf(u.faction) && Math.hypot(u.x - city.x, u.y - city.y) < 300,
+        (u) => !u.dead && this.enemyOf(u.faction) && Math.hypot(u.x - point.x, u.y - point.y) < 320,
       );
       if (!threat.length) continue;
       const need = Math.ceil(threat.length * 1.3) + this.profile.defenders;
       const pool = units
         .filter((u) => !assigned.has(u.id))
-        .sort((a, b) => this.dist2(a, city) - this.dist2(b, city))
+        .sort((a, b) => this.dist2(a, point) - this.dist2(b, point))
         .slice(0, need);
       for (const u of pool) assigned.add(u.id);
-      this.send(pool, city.x, city.y);
+      this.send(pool, point.x, point.y);
     }
 
-    // 2. Grab free real estate: neutral cities nobody is contesting.
+    // 2. Economy first: grab uncontested neutral cities for the income.
     const free = game.cities
       .filter((c) => c.owner < 0 && !this.contested(c))
       .sort((a, b) => this.distToHome(a) - this.distToHome(b));
@@ -94,12 +113,12 @@ export class AIController {
       this.send(pool, city.x, city.y);
     }
 
-    // 3. Wounded troops fall back to a city to be resupplied (higher tiers only).
+    // 3. Wounded or shaken troops fall back to be patched up.
     if (this.profile.retreatHp > 0) {
       for (const u of units) {
         if (assigned.has(u.id)) continue;
-        if (u.hp / u.maxHp > this.profile.retreatHp) continue;
-        const home = this.nearestOwnCity(u);
+        if (u.hp / u.maxHp > this.profile.retreatHp && u.morale > 0.25) continue;
+        const home = this.nearestHome(u);
         if (!home) continue;
         assigned.add(u.id);
         this.send([u], home.x, home.y);
@@ -116,7 +135,6 @@ export class AIController {
     if (army.length >= this.profile.wave) {
       this.send(army, objective.x, objective.y);
     } else {
-      // Not enough for a push yet: gather at the city closest to the objective.
       const staging = this.stagingPoint(objective);
       if (staging) this.send(army, staging.x, staging.y);
     }
@@ -128,13 +146,12 @@ export class AIController {
     );
   }
 
-  dist2(unit, city) {
-    return (unit.x - city.x) ** 2 + (unit.y - city.y) ** 2;
+  dist2(unit, point) {
+    return (unit.x - point.x) ** 2 + (unit.y - point.y) ** 2;
   }
 
   center() {
-    const cities = this.myCities();
-    const list = cities.length ? cities : this.myUnits();
+    const list = this.homePoints().length ? this.homePoints() : this.myUnits();
     if (!list.length) return { x: this.game.terrain.width / 2, y: this.game.terrain.height / 2 };
     let x = 0;
     let y = 0;
@@ -145,25 +162,26 @@ export class AIController {
     return { x: x / list.length, y: y / list.length };
   }
 
-  distToHome(city) {
+  distToHome(point) {
     const c = this.center();
-    return Math.hypot(c.x - city.x, c.y - city.y);
+    return Math.hypot(c.x - point.x, c.y - point.y);
   }
 
-  nearestOwnCity(unit) {
+  nearestHome(unit) {
     let best = null;
     let bestD = Infinity;
-    for (const c of this.myCities()) {
-      const d = this.dist2(unit, c);
+    for (const p of this.homePoints()) {
+      const d = this.dist2(unit, p);
       if (d < bestD) {
         bestD = d;
-        best = c;
+        best = p;
       }
     }
     return best;
   }
 
-  // Prefer nearby, lightly defended targets; neutrals are cheapest of all.
+  // Neutral cities are cheap income; enemy bases end the game. Defended ground
+  // is discounted by `focus`.
   pickObjective(army) {
     const game = this.game;
     let ax = 0;
@@ -175,77 +193,95 @@ export class AIController {
     ax /= army.length;
     ay /= army.length;
 
+    const defendersNear = (p, radius) =>
+      game.units.filter((u) => !u.dead && this.enemyOf(u.faction) && Math.hypot(u.x - p.x, u.y - p.y) < radius).length;
+
     let best = null;
     let bestScore = Infinity;
+
     for (const city of game.cities) {
       if (city.owner === this.faction) continue;
       if (city.owner >= 0 && game.areAllied(city.owner, this.faction)) continue;
-      const defenders = game.units.filter(
-        (u) => !u.dead && this.enemyOf(u.faction) && Math.hypot(u.x - city.x, u.y - city.y) < CITY.captureRadius * 1.6,
-      ).length;
       const dist = Math.hypot(city.x - ax, city.y - ay);
-      const neutralBonus = city.owner < 0 ? 0.55 : 1;
-      const score = dist * neutralBonus + defenders * 130 * this.profile.focus;
+      const score = dist * (city.owner < 0 ? 0.55 : 1) + defendersNear(city, CITY.captureRadius * 1.6) * 130 * this.profile.focus;
       if (score < bestScore) {
         bestScore = score;
         best = city;
       }
     }
+
+    for (const base of game.bases) {
+      if (base.dead || !this.enemyOf(base.owner)) continue;
+      const dist = Math.hypot(base.x - ax, base.y - ay);
+      // Worth committing to, but only once the army is big enough to matter.
+      const readiness = army.length >= this.profile.wave * 1.5 ? 0.45 : 2;
+      const score = dist * readiness + defendersNear(base, 260) * 140 * this.profile.focus;
+      if (score < bestScore) {
+        bestScore = score;
+        best = base;
+      }
+    }
+
     return best;
   }
 
   stagingPoint(objective) {
     let best = null;
     let bestD = Infinity;
-    for (const c of this.myCities()) {
-      const d = Math.hypot(c.x - objective.x, c.y - objective.y);
+    for (const p of this.homePoints()) {
+      const d = Math.hypot(p.x - objective.x, p.y - objective.y);
       if (d < bestD) {
         bestD = d;
-        best = c;
+        best = p;
       }
     }
     return best;
   }
 
-  manageProduction(cities, units) {
-    if (!cities.length) return;
+  manageProduction(bases, units) {
+    if (!bases.length) return;
+    const me = this.me;
     const heavies = units.filter((u) => u.type === 'heavy').length;
     const ratio = units.length ? heavies / units.length : 0;
-    const wantHeavy = ratio < this.profile.heavyRatio;
 
-    for (const city of cities) {
-      // Front-line cities keep pumping cheap bodies; safe rear cities invest.
-      const distToFront = this.frontDistance(city);
-      const safe = distToFront > 520;
-      let want = 'light';
-      if (wantHeavy && (safe || this.profile.heavyRatio > 0.3)) want = 'heavy';
-      // Never start a 13-second heavy while the city itself is under attack.
-      if (this.contested(city)) want = 'light';
+    // Hysteresis. Without a dead band the ratio crosses the target every time a
+    // unit pops, the bot flips the build order, and the part-built unit is
+    // refunded and restarted — the treasury fills up while nothing gets made.
+    const target = this.profile.heavyRatio;
+    if (ratio < target * 0.75) this.wantHeavy = true;
+    else if (ratio > target * 1.25) this.wantHeavy = false;
 
-      if (city.produce !== want) {
-        // Do not throw away an almost-finished unit.
-        if (city.progress / UNITS[city.produce].buildTime < 0.65) {
-          this.game.issue({ type: 'produce', faction: this.faction, city: city.id, unitType: want });
+    // Do not build into bankruptcy: leave headroom for the upkeep bill.
+    const margin = me.income - me.upkeep;
+    const canAfford = me.gold > (this.profile.reserve || 0) && margin > -1;
+
+    for (const base of bases) {
+      if (base.paused === canAfford) {
+        this.game.issue({ type: 'togglePause', faction: this.faction, base: base.id });
+      }
+
+      // Only ever retype a base that has not paid for its current unit yet;
+      // switching mid-build throws away the progress.
+      if (!base.charged) {
+        let want = this.wantHeavy ? 'heavy' : 'light';
+        if (this.threatened(base)) want = 'light';
+        if (want === 'heavy' && me.gold < UNITS.heavy.cost * 1.4) want = 'light';
+        if (base.produce !== want) {
+          this.game.issue({ type: 'produce', faction: this.faction, base: base.id, unitType: want });
         }
       }
-      if (!city.rally) {
-        const objective = this.pickObjective(units.length ? units : [{ x: city.x, y: city.y }]);
-        if (objective) {
-          const staging = this.stagingPoint(objective) || city;
-          this.game.issue({ type: 'rally', faction: this.faction, city: city.id, x: staging.x, y: staging.y });
-        }
+
+      if (!base.rally) {
+        const objective = this.pickObjective(units.length ? units : [{ x: base.x, y: base.y }]);
+        const staging = (objective && this.stagingPoint(objective)) || base;
+        this.game.issue({ type: 'rally', faction: this.faction, base: base.id, x: staging.x, y: staging.y });
       }
     }
   }
 
-  frontDistance(city) {
-    let best = Infinity;
-    for (const c of this.game.cities) {
-      if (c.owner === this.faction) continue;
-      if (c.owner >= 0 && this.game.areAllied(c.owner, this.faction)) continue;
-      const d = Math.hypot(c.x - city.x, c.y - city.y);
-      if (d < best) best = d;
-    }
-    return best;
+  threatened(point) {
+    return this.game.units.some(
+      (u) => !u.dead && this.enemyOf(u.faction) && Math.hypot(u.x - point.x, u.y - point.y) < 260,
+    );
   }
 }
