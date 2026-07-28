@@ -1,0 +1,428 @@
+import { DT, SIM_HZ, UNITS, CITY, FACTION_COLORS, NEUTRAL_COLOR } from './config.js';
+import { Game } from './game.js';
+import { AIController } from './ai.js';
+import { Camera } from './camera.js';
+import { InputController } from './input.js';
+import { ReplayPlayer, buildReplay, saveReplay } from './replay.js';
+import { platform } from './platform.js';
+
+const DIFFICULTY_NAMES = { easy: 'Recruit', normal: 'Officer', hard: 'Marshal' };
+
+function formatTime(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+// Owns one match (or one replay playback): the loop, the camera, the HUD.
+export class Session {
+  constructor(app, setup, options = {}) {
+    this.app = app;
+    this.setup = setup;
+    this.replay = options.replay || null;
+    this.isReplay = !!this.replay;
+
+    if (this.isReplay) {
+      this.player = new ReplayPlayer(this.replay);
+      this.viewerFaction = this.replay.viewerFaction;
+      this.ais = [];
+    } else {
+      this._game = new Game(setup);
+      this.viewerFaction = setup.slots.findIndex((s) => s.kind === 'human');
+      if (this.viewerFaction < 0) this.viewerFaction = 0;
+      this.ais = setup.slots
+        .map((s, i) => (s.kind === 'ai' ? new AIController(this._game, i, s.difficulty) : null))
+        .filter(Boolean);
+    }
+
+    this.camera = new Camera(setup.map.width, setup.map.height);
+    this.renderer = app.renderer;
+    this.renderer.attach(this.game);
+
+    this.canvas = document.getElementById('game-canvas');
+    this.minimapEl = document.getElementById('minimap');
+    this.input = new InputController({
+      canvas: this.canvas,
+      minimap: this.minimapEl,
+      camera: this.camera,
+      session: this,
+    });
+    this.input.enabled = !this.isReplay;
+
+    this.speed = options.speed || 1;
+    this.paused = false;
+    this.accumulator = 0;
+    this.hudTimer = 0;
+    this.resultShown = false;
+    this.running = false;
+    this.selectionDirty = true;
+    this.lastTs = 0;
+
+    const home = this.game.cities.find((c) => c.owner === this.viewerFaction);
+    this.camera.zoom = 1.2;
+    if (home) this.camera.centerOn(home.x, home.y);
+
+    this.onResize = () => this.resize();
+    window.addEventListener('resize', this.onResize);
+    this.setupReplayBar();
+    this.resize();
+    this.renderFactionBars();
+  }
+
+  get game() {
+    return this.player ? this.player.game : this._game;
+  }
+
+  // ------------------------------------------------------------------- loop
+
+  start() {
+    this.running = true;
+    this.lastTs = performance.now();
+    if (!this.isReplay) platform.gameplayStart();
+    const frame = (ts) => {
+      if (!this.running) return;
+      this.frame(ts);
+      this.raf = requestAnimationFrame(frame);
+    };
+    this.raf = requestAnimationFrame(frame);
+  }
+
+  stop() {
+    this.running = false;
+    if (this.raf) cancelAnimationFrame(this.raf);
+    window.removeEventListener('resize', this.onResize);
+    this.input.destroy();
+    platform.gameplayStop();
+  }
+
+  frame(ts) {
+    const dt = Math.min(0.12, (ts - this.lastTs) / 1000);
+    this.lastTs = ts;
+
+    this.input.updateCamera(dt);
+
+    if (!this.paused && !this.game.over) {
+      this.accumulator += dt * this.speed;
+      let steps = 0;
+      const maxSteps = Math.ceil(this.speed * 4) + 4;
+      while (this.accumulator >= DT && steps < maxSteps) {
+        this.stepSim();
+        this.accumulator -= DT;
+        steps++;
+      }
+      // Do not let a hitch build up an unpayable simulation debt.
+      if (this.accumulator > DT * maxSteps) this.accumulator = 0;
+    }
+
+    this.input.prune();
+    this.render();
+
+    this.hudTimer -= dt;
+    if (this.hudTimer <= 0) {
+      this.hudTimer = 0.12;
+      this.updateHud();
+    }
+
+    if (this.isReplay) this.updateReplayBar();
+    if (this.game.over && !this.resultShown) this.showResult();
+  }
+
+  stepSim() {
+    if (this.player) {
+      if (!this.player.finished) this.player.step();
+      return;
+    }
+    for (const ai of this.ais) ai.update(DT);
+    this._game.step();
+  }
+
+  render() {
+    this.renderer.draw(this.game, this.camera, {
+      selection: this.input.selection,
+      selectionBox: this.input.selectionBox,
+      viewerFaction: this.viewerFaction,
+      hoverUnitId: this.input.hoverUnitId,
+      showCommands: true,
+    });
+  }
+
+  resize() {
+    const view = this.renderer.resize();
+    this.camera.setViewport(view.width, view.height);
+  }
+
+  // -------------------------------------------------------------- callbacks
+
+  onSelectionChanged() {
+    this.selectionDirty = true;
+    this.updateSelectionPanel();
+  }
+
+  pingMarker(x, y, attackMove) {
+    this.game.effects.push({
+      kind: 'ping',
+      x,
+      y,
+      faction: attackMove ? -2 : this.viewerFaction,
+      t: 0,
+      life: 0.5,
+    });
+  }
+
+  flash(message) {
+    const toast = document.getElementById('toast');
+    toast.textContent = message;
+    toast.classList.add('show');
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => toast.classList.remove('show'), 1400);
+  }
+
+  togglePause() {
+    if (this.game.over) return;
+    this.paused = !this.paused;
+    this.flash(this.paused ? 'Paused' : 'Resumed');
+  }
+
+  toggleMenu() {
+    if (this.isReplay) {
+      this.app.exitReplay();
+      return;
+    }
+    const overlay = document.getElementById('overlay-ingame');
+    const opening = overlay.classList.contains('hidden');
+    overlay.classList.toggle('hidden', !opening);
+    this.paused = opening;
+  }
+
+  changeSpeed(direction) {
+    const steps = [0.5, 0.75, 1, 1.5, 2, 3];
+    let i = steps.findIndex((s) => Math.abs(s - this.speed) < 0.01);
+    if (i < 0) i = 2;
+    i = Math.max(0, Math.min(steps.length - 1, i + direction));
+    this.speed = steps[i];
+    this.flash(`Speed ${this.speed}×`);
+  }
+
+  // -------------------------------------------------------------------- HUD
+
+  factionLabel(index) {
+    const slot = this.setup.slots[index];
+    if (index === this.viewerFaction) return 'You';
+    if (!slot) return `Player ${index + 1}`;
+    if (slot.kind === 'ai') return `Bot ${index + 1} · ${DIFFICULTY_NAMES[slot.difficulty] || 'Officer'}`;
+    return `Player ${index + 1}`;
+  }
+
+  renderFactionBars() {
+    const host = document.getElementById('faction-bars');
+    host.innerHTML = '';
+    this.factionRows = new Map();
+    for (const f of this.game.factions) {
+      if (f.kind === 'none') continue;
+      const row = document.createElement('div');
+      row.className = 'faction-row';
+      row.innerHTML = `<span class="swatch" style="background:${FACTION_COLORS[f.index % FACTION_COLORS.length]}"></span>
+        <span class="who">${this.factionLabel(f.index)}</span>
+        <span class="cities">0</span><span style="color:var(--muted)">cities</span>
+        <span class="units">0</span><span style="color:var(--muted)">units</span>`;
+      host.appendChild(row);
+      this.factionRows.set(f.index, row);
+    }
+  }
+
+  updateHud() {
+    const game = this.game;
+    const me = this.viewerFaction;
+    const units = game.units.filter((u) => u.faction === me);
+    const cap = game.supplyCap(me);
+    const light = units.filter((u) => u.type === 'light').length;
+    const heavy = units.length - light;
+
+    const supply = document.getElementById('stat-supply');
+    supply.querySelector('.stat-value').textContent = `${units.length}/${cap}`;
+    supply.classList.toggle('warn', units.length > cap);
+    document.getElementById('stat-cities').querySelector('.stat-value').textContent = String(game.countCities(me));
+    document.getElementById('stat-army').querySelector('.stat-value').textContent = `${light}L · ${heavy}H`;
+    document.getElementById('stat-clock').querySelector('.stat-value').textContent = formatTime(game.time);
+    document.getElementById('stat-speed').querySelector('.stat-value').textContent = `${this.speed}×`;
+
+    if (this.factionRows) {
+      for (const [index, row] of this.factionRows) {
+        const f = game.factions[index];
+        row.querySelector('.cities').textContent = String(game.countCities(index));
+        row.querySelector('.units').textContent = String(game.countUnits(index));
+        row.classList.toggle('dead', !f.alive);
+      }
+    }
+
+    this.updateSelectionPanel();
+  }
+
+  updateSelectionPanel() {
+    const panel = document.getElementById('selection-panel');
+    const sel = this.input.selection;
+    const game = this.game;
+
+    if (sel.cityId >= 0) {
+      const city = game.cities[sel.cityId];
+      if (!city) {
+        panel.classList.remove('visible');
+        return;
+      }
+      const mine = city.owner === this.viewerFaction && !this.isReplay;
+      // The owner is part of the key: losing a city must redraw the panel.
+      const key = `city${city.id}:${city.owner}`;
+      if (this.selectionDirty || this.panelKind !== key) {
+        this.panelKind = key;
+        this.selectionDirty = false;
+        const owner =
+          city.owner < 0 ? 'Neutral' : city.owner === this.viewerFaction ? 'Yours' : this.factionLabel(city.owner);
+        panel.innerHTML = `
+          <h4>City <span style="color:${city.owner < 0 ? NEUTRAL_COLOR : FACTION_COLORS[city.owner % 4]}">· ${owner}</span></h4>
+          <div class="row"><span>Supports ${CITY.supply} units</span></div>
+          <div class="row"><span class="build-label"></span></div>
+          <div class="progress"><i style="width:0%"></i></div>
+          ${mine ? `<div class="build-row">
+            <button class="btn small" data-produce="light">Light <span style="color:var(--muted)">Q</span></button>
+            <button class="btn small" data-produce="heavy">Heavy <span style="color:var(--muted)">W</span></button>
+            <button class="btn small" data-produce="toggle">॥</button>
+          </div>
+          <div class="hint">Right-click the map to set a rally point.</div>` : ''}`;
+        panel.classList.add('visible');
+        if (mine) {
+          for (const btn of panel.querySelectorAll('[data-produce]')) {
+            btn.addEventListener('click', () => {
+              const kind = btn.dataset.produce;
+              if (kind === 'toggle') {
+                game.issue({ type: 'togglePause', faction: this.viewerFaction, city: city.id });
+              } else {
+                game.issue({ type: 'produce', faction: this.viewerFaction, city: city.id, unitType: kind });
+              }
+            });
+          }
+        }
+      }
+      const label = panel.querySelector('.build-label');
+      const bar = panel.querySelector('.progress > i');
+      if (label) {
+        if (city.owner < 0) label.textContent = 'Capture it to start production';
+        else if (city.paused) label.textContent = 'Production paused';
+        else if (game.countUnits(city.owner) >= game.supplyCap(city.owner)) label.textContent = 'Supply full — production held';
+        else label.textContent = `Building ${UNITS[city.produce].name} (${UNITS[city.produce].buildTime}s)`;
+      }
+      if (bar) bar.style.width = `${Math.min(100, (city.progress / city.buildTime()) * 100)}%`;
+      for (const btn of panel.querySelectorAll('[data-produce]')) {
+        if (btn.dataset.produce === 'toggle') btn.classList.toggle('active', city.paused);
+        else btn.classList.toggle('active', city.produce === btn.dataset.produce && !city.paused);
+      }
+      return;
+    }
+
+    if (sel.units.size) {
+      let light = 0;
+      let heavy = 0;
+      let hp = 0;
+      let maxHp = 0;
+      let starving = 0;
+      for (const id of sel.units) {
+        const u = game.unitsById.get(id);
+        if (!u) continue;
+        if (u.type === 'light') light++;
+        else heavy++;
+        hp += u.hp;
+        maxHp += u.maxHp;
+        if (u.starving) starving++;
+      }
+      panel.classList.add('visible');
+      panel.innerHTML = `
+        <h4>${light + heavy} selected</h4>
+        <div class="row"><span class="pip light"></span>${light} light</div>
+        <div class="row"><span class="pip heavy"></span>${heavy} heavy</div>
+        <div class="progress"><i style="width:${maxHp ? (hp / maxHp) * 100 : 0}%"></i></div>
+        ${starving ? `<div class="hint" style="color:#ff9066">${starving} starving — over supply cap</div>` : ''}`;
+      this.panelKind = 'units';
+      return;
+    }
+
+    panel.classList.remove('visible');
+    this.panelKind = null;
+  }
+
+  // ---------------------------------------------------------------- replays
+
+  setupReplayBar() {
+    const bar = document.getElementById('replay-bar');
+    bar.classList.toggle('hidden', !this.isReplay);
+    if (!this.isReplay) return;
+    this.scrub = document.getElementById('replay-scrub');
+    this.totalTicks = Math.max(1, Math.round(this.replay.duration * SIM_HZ));
+    this.scrub.max = String(this.totalTicks);
+    this.scrub.value = '0';
+    this.scrubbing = false;
+    this.scrub.oninput = () => {
+      this.scrubbing = true;
+      this.paused = true;
+    };
+    this.scrub.onchange = () => {
+      this.player.seek(Number(this.scrub.value));
+      this.scrubbing = false;
+      this.accumulator = 0;
+    };
+  }
+
+  updateReplayBar() {
+    if (!this.scrub || this.scrubbing) return;
+    this.scrub.value = String(Math.min(this.totalTicks, this.game.tickCount));
+    document.getElementById('replay-time').textContent =
+      `${formatTime(this.game.time)} / ${formatTime(this.replay.duration)}`;
+  }
+
+  replayRestart() {
+    this.player.reset();
+    this.renderer.attach(this.game);
+    this.input.clearSelection();
+    this.accumulator = 0;
+    this.paused = false;
+    this.resultShown = false;
+    this.renderFactionBars();
+  }
+
+  // ----------------------------------------------------------------- result
+
+  showResult() {
+    this.resultShown = true;
+    const game = this.game;
+    const myTeam = this.setup.slots[this.viewerFaction]?.team ?? 0;
+    const won = game.winnerTeam === myTeam;
+
+    if (this.isReplay) {
+      this.flash(won ? 'Replay finished — victory' : 'Replay finished');
+      this.paused = true;
+      return;
+    }
+
+    const f = game.factions[this.viewerFaction];
+    const overlay = document.getElementById('overlay-result');
+    const title = document.getElementById('result-title');
+    title.textContent = won ? 'Victory' : 'Defeat';
+    title.className = won ? 'win' : 'lose';
+    document.getElementById('result-sub').textContent = won
+      ? 'The map is yours.'
+      : 'Your last city and your last dot are gone.';
+    document.getElementById('result-stats').innerHTML = `
+      <div class="line"><span>Duration</span><span>${formatTime(game.time)}</span></div>
+      <div class="line"><span>Units built</span><span>${f.produced}</span></div>
+      <div class="line"><span>Units lost</span><span>${f.lost}</span></div>
+      <div class="line"><span>Kills</span><span>${f.killed}</span></div>
+      <div class="line"><span>Cities captured</span><span>${f.captured}</span></div>`;
+    overlay.classList.remove('hidden');
+
+    try {
+      this.lastReplay = buildReplay(this);
+      saveReplay(this.lastReplay);
+    } catch {
+      this.lastReplay = null;
+    }
+    if (won) platform.happytime();
+    platform.gameplayStop();
+  }
+}
