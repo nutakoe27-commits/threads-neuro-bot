@@ -130,9 +130,16 @@ export const PALETTE = {
   text: '#0f1418',
 };
 
-// Tuned with scripts/tune.mjs against the current maps.
+// Tuned with scripts/tune.mjs against the current maps and economy.
+//
+// One lever dominated the sweep: `reserve`, the gold a bot sits on before it
+// will build. Spending everything won 75% of games — hoarding does nothing in
+// an economy where gold only buys units. `wave` has an optimum near 12 (both
+// dribbling attacks in and massing forever lose). The remaining levers came out
+// inside the noise at that sample size, so the tiers use them in the direction
+// that makes sense mechanically rather than pretending the numbers were real.
 export const AI_PROFILES = {
-  easy:   { think: 1.6, wave: 16, defenders: 4, retreatHp: 0.35, heavyRatio: 0.5, focus: 0.2, reserve: 140 },
-  normal: { think: 0.8, wave: 8,  defenders: 2, retreatHp: 0.15, heavyRatio: 0.3, focus: 0.7, reserve: 40 },
-  hard:   { think: 0.4, wave: 4,  defenders: 2, retreatHp: 0,    heavyRatio: 0.3, focus: 1.2, reserve: 0 },
+  easy:   { think: 1.8, wave: 4,  defenders: 0, retreatHp: 0.4,  heavyRatio: 0.5, focus: 1.2, reserve: 220 },
+  normal: { think: 0.9, wave: 8,  defenders: 2, retreatHp: 0.15, heavyRatio: 0.3, focus: 0.7, reserve: 60 },
+  hard:   { think: 0.4, wave: 12, defenders: 3, retreatHp: 0.15, heavyRatio: 0.3, focus: 0.3, reserve: 0 },
 };
