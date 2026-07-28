@@ -139,7 +139,7 @@ export const PALETTE = {
 // inside the noise at that sample size, so the tiers use them in the direction
 // that makes sense mechanically rather than pretending the numbers were real.
 export const AI_PROFILES = {
-  easy:   { think: 1.8, wave: 4,  defenders: 0, retreatHp: 0.4,  heavyRatio: 0.5, focus: 1.2, reserve: 220 },
-  normal: { think: 0.9, wave: 8,  defenders: 2, retreatHp: 0.15, heavyRatio: 0.3, focus: 0.7, reserve: 60 },
+  easy:   { think: 1.8, wave: 4,  defenders: 0, retreatHp: 0.4,  heavyRatio: 0.5, focus: 1.2, reserve: 160 },
+  normal: { think: 1.1, wave: 8,  defenders: 2, retreatHp: 0.15, heavyRatio: 0.3, focus: 0.7, reserve: 110 },
   hard:   { think: 0.4, wave: 12, defenders: 3, retreatHp: 0.15, heavyRatio: 0.3, focus: 0.3, reserve: 0 },
 };
