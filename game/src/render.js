@@ -1,5 +1,7 @@
-import { TERRAIN, PALETTE, FACTION_COLORS, NEUTRAL_COLOR, CITY } from './config.js';
+import { TERRAIN, TERRAIN_INFO, PALETTE, FACTION_COLORS, NEUTRAL_COLOR, CITY, info } from './config.js';
 import { CELL } from './terrain.js';
+import { computeFrontLines } from './territory.js';
+import { traceContours } from './contour.js';
 
 function shade(hex, amount) {
   const n = parseInt(hex.slice(1), 16);
@@ -13,51 +15,109 @@ function shade(hex, amount) {
 }
 
 // Terrain never changes during a match, so bake it once into an offscreen
-// canvas and blit it. Cells are drawn as overlapping discs, which reads as
-// organic shapes without any art assets.
+// canvas and blit it. Cells are drawn as overlapping discs, which gives the
+// soft organic shapes of a hand-drawn map without any art assets.
 export function bakeTerrain(terrain) {
   const canvas = document.createElement('canvas');
   canvas.width = terrain.width;
   canvas.height = terrain.height;
   const ctx = canvas.getContext('2d');
 
-  ctx.fillStyle = PALETTE.clear;
+  ctx.fillStyle = TERRAIN_INFO[TERRAIN.PLAINS].color;
   ctx.fillRect(0, 0, terrain.width, terrain.height);
 
-  const draw = (type, color, radius) => {
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    for (let cy = 0; cy < terrain.rows; cy++) {
-      for (let cx = 0; cx < terrain.cols; cx++) {
-        if (terrain.atCell(cx, cy) !== type) continue;
-        const x = cx * CELL + CELL / 2;
-        const y = cy * CELL + CELL / 2;
-        ctx.moveTo(x + radius, y);
-        ctx.arc(x, y, radius, 0, Math.PI * 2);
-      }
+  // Roads sit on top of the ground they cross, so they are excluded from the
+  // region outlines and stroked separately afterwards.
+  const roadish = (t) => t === TERRAIN.ROAD || t === TERRAIN.BRIDGE;
+
+  const region = (types, fill, outline) => {
+    const wanted = new Set(types);
+    const inside = (cx, cy) => {
+      if (cx < 0 || cy < 0 || cx >= terrain.cols || cy >= terrain.rows) return false;
+      return wanted.has(terrain.atCell(cx, cy));
+    };
+    const loops = traceContours(inside, terrain.cols, terrain.rows, CELL, 3);
+    if (!loops.length) return;
+    const path = new Path2D();
+    for (const loop of loops) {
+      path.moveTo(loop[0].x, loop[0].y);
+      for (let i = 1; i < loop.length; i++) path.lineTo(loop[i].x, loop[i].y);
+      path.closePath();
     }
-    ctx.fill();
+    if (outline) {
+      ctx.strokeStyle = outline;
+      ctx.lineWidth = 7;
+      ctx.lineJoin = 'round';
+      ctx.stroke(path);
+    }
+    ctx.fillStyle = fill;
+    ctx.fill(path, 'evenodd');
   };
 
-  draw(TERRAIN.ROUGH, PALETTE.rough, CELL * 0.8);
-  draw(TERRAIN.WATER, '#0d1420', CELL * 0.9);
-  draw(TERRAIN.WATER, PALETTE.water, CELL * 0.78);
+  // Painted back to front. Bridges count as water underneath so a river reads
+  // as continuous rather than chopped in half at every crossing.
+  const H = TERRAIN_INFO[TERRAIN.HILLS];
+  const M = TERRAIN_INFO[TERRAIN.MOUNTAIN];
+  const F = TERRAIN_INFO[TERRAIN.FOREST];
+  const W = TERRAIN_INFO[TERRAIN.WATER];
 
-  // Faint grid to give the empty plains a sense of scale.
-  ctx.strokeStyle = PALETTE.grid;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let x = 0; x <= terrain.width; x += 200) {
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, terrain.height);
-  }
-  for (let y = 0; y <= terrain.height; y += 200) {
-    ctx.moveTo(0, y);
-    ctx.lineTo(terrain.width, y);
-  }
-  ctx.stroke();
+  region([TERRAIN.HILLS, TERRAIN.MOUNTAIN], H.color);
+  region([TERRAIN.MOUNTAIN], M.color, shade(M.color, -0.2));
+  region([TERRAIN.FOREST], F.color);
+  region([TERRAIN.WATER, TERRAIN.BRIDGE], W.color, shade(W.color, -0.25));
 
+  drawRoads(ctx, terrain);
   return canvas;
+}
+
+// Roads are stroked along their centre lines. Each path is split into runs of
+// road and bridge so a crossing gets brown planks and the rest stays gravel.
+function drawRoads(ctx, terrain) {
+  if (!terrain.roadPaths || !terrain.roadPaths.length) return;
+  const road = TERRAIN_INFO[TERRAIN.ROAD];
+  const bridge = TERRAIN_INFO[TERRAIN.BRIDGE];
+
+  const runs = [];
+  for (const path of terrain.roadPaths) {
+    // Resample so the road/bridge switch lands close to the actual bank.
+    const dense = [];
+    for (let i = 0; i < path.length - 1; i++) {
+      const a = path[i];
+      const b = path[i + 1];
+      const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / (CELL * 0.5)));
+      for (let s = 0; s < steps; s++) {
+        dense.push({ x: a.x + ((b.x - a.x) * s) / steps, y: a.y + ((b.y - a.y) * s) / steps });
+      }
+    }
+    dense.push(path[path.length - 1]);
+
+    let current = null;
+    for (let i = 0; i < dense.length; i++) {
+      const onBridge = terrain.at(dense[i].x, dense[i].y) === TERRAIN.BRIDGE;
+      if (!current || current.bridge !== onBridge) {
+        if (current) current.points.push(dense[i]); // overlap so runs meet
+        current = { bridge: onBridge, points: [dense[i]] };
+        runs.push(current);
+      } else {
+        current.points.push(dense[i]);
+      }
+    }
+  }
+
+  const stroke = (run, color, width) => {
+    if (run.points.length < 2) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(run.points[0].x, run.points[0].y);
+    for (let i = 1; i < run.points.length; i++) ctx.lineTo(run.points[i].x, run.points[i].y);
+    ctx.stroke();
+  };
+
+  for (const run of runs) stroke(run, shade(run.bridge ? bridge.color : road.color, -0.35), CELL * 1.0);
+  for (const run of runs) stroke(run, run.bridge ? bridge.color : road.color, CELL * 0.68);
 }
 
 export function bakeMinimap(terrain, width = 220) {
@@ -66,18 +126,31 @@ export function bakeMinimap(terrain, width = 220) {
   canvas.width = Math.round(terrain.width * scale);
   canvas.height = Math.round(terrain.height * scale);
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = PALETTE.clear;
+  ctx.fillStyle = TERRAIN_INFO[TERRAIN.PLAINS].color;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   const w = Math.max(1, CELL * scale);
   for (let cy = 0; cy < terrain.rows; cy++) {
     for (let cx = 0; cx < terrain.cols; cx++) {
       const t = terrain.atCell(cx, cy);
-      if (t === TERRAIN.CLEAR) continue;
-      ctx.fillStyle = t === TERRAIN.WATER ? PALETTE.water : PALETTE.rough;
+      if (t === TERRAIN.PLAINS) continue;
+      ctx.fillStyle = TERRAIN_INFO[t] ? TERRAIN_INFO[t].color : TERRAIN_INFO[0].color;
       ctx.fillRect(cx * CELL * scale, cy * CELL * scale, w + 0.5, w + 0.5);
     }
   }
   return canvas;
+}
+
+function star(ctx, x, y, outer, inner, points = 5) {
+  ctx.beginPath();
+  for (let i = 0; i < points * 2; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    const a = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+    const px = x + Math.cos(a) * r;
+    const py = y + Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
 }
 
 export class Renderer {
@@ -89,12 +162,15 @@ export class Renderer {
     this.terrainCanvas = null;
     this.minimapBase = null;
     this.dpr = 1;
+    this.frontLines = [];
+    this.frontVersion = -1;
   }
 
   attach(game) {
     this.game = game;
     this.terrainCanvas = bakeTerrain(game.terrain);
     this.minimapBase = bakeMinimap(game.terrain, 240);
+    this.frontVersion = -1;
     if (this.minimap) {
       this.minimap.width = this.minimapBase.width;
       this.minimap.height = this.minimapBase.height;
@@ -133,17 +209,18 @@ export class Renderer {
     const b = camera.bounds;
     ctx.drawImage(this.terrainCanvas, 0, 0);
 
-    this.drawCities(ctx, game, camera, selection, viewerFaction);
+    this.drawFrontLines(ctx, game, camera);
+    this.drawCities(ctx, game, selection, viewerFaction);
     this.drawOrders(ctx, game, selection, showCommands);
-    this.drawUnits(ctx, game, camera, b, selection, viewerFaction, hoverUnitId);
+    this.drawUnits(ctx, game, b, selection, hoverUnitId);
     this.drawEffects(ctx, game);
 
     ctx.restore();
 
     if (selectionBox) {
-      ctx.strokeStyle = 'rgba(230,240,255,0.9)';
-      ctx.fillStyle = 'rgba(120,170,255,0.12)';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(20,26,32,0.9)';
+      ctx.fillStyle = 'rgba(255,255,255,0.22)';
+      ctx.lineWidth = 1.5;
       const x = Math.min(selectionBox.x1, selectionBox.x2);
       const y = Math.min(selectionBox.y1, selectionBox.y2);
       const w = Math.abs(selectionBox.x2 - selectionBox.x1);
@@ -153,37 +230,64 @@ export class Renderer {
     }
 
     ctx.restore();
-    this.drawMinimap(game, camera, viewerFaction);
+    this.drawMinimap(game, camera);
   }
 
-  drawCities(ctx, game, camera, selection, viewerFaction) {
+  // The border between territories. Recomputed only when a city changes hands.
+  drawFrontLines(ctx, game, camera) {
+    if (this.frontVersion !== game.territoryVersion) {
+      this.frontVersion = game.territoryVersion;
+      this.frontLines = computeFrontLines(game);
+    }
+    if (!this.frontLines.length) return;
+    ctx.strokeStyle = PALETTE.border;
+    ctx.lineWidth = Math.max(2.5, 4 / camera.zoom);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (const line of this.frontLines) {
+      ctx.moveTo(line[0].x, line[0].y);
+      for (let i = 1; i < line.length; i++) ctx.lineTo(line[i].x, line[i].y);
+    }
+    ctx.stroke();
+  }
+
+  drawCities(ctx, game, selection, viewerFaction) {
     for (const city of game.cities) {
       const color = this.colorOf(city.owner);
       const r = CITY.radius;
 
-      // Supply halo — the area where units are fed and repaired.
+      // Supply ring — the area where units are fed and repaired.
       if (city.owner >= 0) {
         ctx.beginPath();
         ctx.arc(city.x, city.y, CITY.captureRadius, 0, Math.PI * 2);
-        ctx.fillStyle = `${color}0d`;
-        ctx.fill();
-        ctx.strokeStyle = `${color}22`;
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.35;
+        ctx.setLineDash([9, 9]);
+        ctx.lineWidth = 2;
         ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
       }
 
+      // A coloured disc with a dark rim; capitals carry a white star.
       ctx.beginPath();
       ctx.arc(city.x, city.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = '#0d1119';
-      ctx.fill();
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = color;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(city.x, city.y, r * 0.42, 0, Math.PI * 2);
       ctx.fillStyle = color;
       ctx.fill();
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = '#12161a';
+      ctx.stroke();
+
+      ctx.fillStyle = city.owner < 0 ? '#12161a' : '#ffffff';
+      if (city.capital) {
+        star(ctx, city.x, city.y, r * 0.66, r * 0.28);
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.arc(city.x, city.y, r * 0.34, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       // Production progress runs clockwise from the top.
       if (city.owner >= 0 && !city.paused) {
@@ -191,8 +295,8 @@ export class Renderer {
         if (frac > 0.001) {
           ctx.beginPath();
           ctx.arc(city.x, city.y, r + 6, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
-          ctx.strokeStyle = city.produce === 'heavy' ? shade(color, 0.35) : color;
-          ctx.lineWidth = city.produce === 'heavy' ? 4 : 2.5;
+          ctx.strokeStyle = city.produce === 'heavy' ? '#12161a' : color;
+          ctx.lineWidth = city.produce === 'heavy' ? 4.5 : 3;
           ctx.stroke();
         }
       }
@@ -201,8 +305,8 @@ export class Renderer {
         ctx.beginPath();
         ctx.arc(city.x, city.y, r + 12, -Math.PI / 2, -Math.PI / 2 + city.captureProgress * Math.PI * 2);
         ctx.strokeStyle = this.colorOf(city.captureBy);
-        ctx.lineWidth = 3;
-        ctx.setLineDash([4, 3]);
+        ctx.lineWidth = 4;
+        ctx.setLineDash([5, 4]);
         ctx.stroke();
         ctx.setLineDash([]);
       }
@@ -211,42 +315,45 @@ export class Renderer {
         ctx.beginPath();
         ctx.arc(city.x, city.y, r + 9, 0, Math.PI * 2);
         ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(city.x, city.y, r + 9, 0, Math.PI * 2);
+        ctx.strokeStyle = '#12161a';
+        ctx.lineWidth = 1;
         ctx.stroke();
         if (city.rally) {
           ctx.beginPath();
           ctx.moveTo(city.x, city.y);
           ctx.lineTo(city.rally.x, city.rally.y);
-          ctx.strokeStyle = `${color}66`;
-          ctx.setLineDash([6, 6]);
-          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = color;
+          ctx.setLineDash([7, 6]);
+          ctx.lineWidth = 2;
           ctx.stroke();
           ctx.setLineDash([]);
           ctx.beginPath();
-          ctx.arc(city.rally.x, city.rally.y, 5, 0, Math.PI * 2);
-          ctx.strokeStyle = color;
+          ctx.arc(city.rally.x, city.rally.y, 6, 0, Math.PI * 2);
           ctx.stroke();
         }
       }
 
       // Paused production gets a clear visual so it is never a mystery.
       if (city.owner === viewerFaction && city.paused) {
-        ctx.fillStyle = '#0b0e13';
-        ctx.fillRect(city.x - 5, city.y - r - 16, 10, 10);
-        ctx.fillStyle = color;
-        ctx.fillRect(city.x - 4, city.y - r - 15, 3, 8);
-        ctx.fillRect(city.x + 1, city.y - r - 15, 3, 8);
+        ctx.fillStyle = '#12161a';
+        ctx.fillRect(city.x - 6, city.y - r - 18, 4, 11);
+        ctx.fillRect(city.x + 2, city.y - r - 18, 4, 11);
       }
     }
   }
 
   drawOrders(ctx, game, selection, showCommands) {
     if (!showCommands || !selection.units.size) return;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(18,22,26,0.35)';
+    ctx.setLineDash([6, 5]);
     for (const id of selection.units) {
       const u = game.unitsById.get(id);
       if (!u || !u.dest) continue;
-      ctx.strokeStyle = 'rgba(200,220,255,0.25)';
       ctx.beginPath();
       ctx.moveTo(u.x, u.y);
       if (u.path) {
@@ -256,9 +363,10 @@ export class Renderer {
       }
       ctx.stroke();
     }
+    ctx.setLineDash([]);
   }
 
-  drawUnits(ctx, game, camera, bounds, selection, viewerFaction, hoverUnitId) {
+  drawUnits(ctx, game, bounds, selection, hoverUnitId) {
     const pad = 30;
     for (const u of game.units) {
       if (u.x < bounds.left - pad || u.x > bounds.right + pad || u.y < bounds.top - pad || u.y > bounds.bottom + pad) {
@@ -270,15 +378,15 @@ export class Renderer {
 
       if (isSelected) {
         ctx.beginPath();
-        ctx.arc(u.x, u.y, r + 4, 0, Math.PI * 2);
+        ctx.arc(u.x, u.y, r + 5, 0, Math.PI * 2);
         ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 3;
         ctx.stroke();
       } else if (u.id === hoverUnitId) {
         ctx.beginPath();
-        ctx.arc(u.x, u.y, r + 4, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-        ctx.lineWidth = 1;
+        ctx.arc(u.x, u.y, r + 5, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+        ctx.lineWidth = 2;
         ctx.stroke();
       }
 
@@ -287,29 +395,30 @@ export class Renderer {
       ctx.fillStyle = color;
       ctx.fill();
 
+      // Light is a plain dot; heavy wears a thick black ring.
       if (u.type === 'heavy') {
-        // Heavies get a dark core so they read instantly at any zoom.
+        ctx.lineWidth = r * 0.55;
+        ctx.strokeStyle = '#0b0d10';
         ctx.beginPath();
-        ctx.arc(u.x, u.y, r * 0.45, 0, Math.PI * 2);
-        ctx.fillStyle = '#0b0e13';
-        ctx.fill();
+        ctx.arc(u.x, u.y, r * 0.78, 0, Math.PI * 2);
+        ctx.stroke();
       }
 
       const hpFrac = u.hp / u.maxHp;
       if (hpFrac < 0.995) {
         ctx.beginPath();
-        ctx.arc(u.x, u.y, r + 2.5, -Math.PI / 2, -Math.PI / 2 + hpFrac * Math.PI * 2);
-        ctx.strokeStyle = hpFrac > 0.5 ? '#8ef0a8' : hpFrac > 0.25 ? '#f5d76e' : '#ff6b6b';
-        ctx.lineWidth = 1.8;
+        ctx.arc(u.x, u.y, r + 3, -Math.PI / 2, -Math.PI / 2 + hpFrac * Math.PI * 2);
+        ctx.strokeStyle = hpFrac > 0.5 ? '#3ddc6b' : hpFrac > 0.25 ? '#ffd23f' : '#ff4d4d';
+        ctx.lineWidth = 2.4;
         ctx.stroke();
       }
 
       if (u.starving) {
         const pulse = 0.5 + 0.5 * Math.sin(game.time * 6 + u.id);
         ctx.beginPath();
-        ctx.arc(u.x, u.y, r + 6, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(255,120,80,${0.25 + pulse * 0.5})`;
-        ctx.lineWidth = 1.2;
+        ctx.arc(u.x, u.y, r + 7, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255,90,40,${0.35 + pulse * 0.5})`;
+        ctx.lineWidth = 2;
         ctx.stroke();
       }
     }
@@ -319,37 +428,39 @@ export class Renderer {
     for (const e of game.effects) {
       const k = 1 - e.t / e.life;
       if (e.kind === 'tracer') {
-        ctx.strokeStyle = `${this.colorOf(e.faction)}${Math.round(k * 200).toString(16).padStart(2, '0')}`;
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = `rgba(20,24,28,${k * 0.7})`;
+        ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(e.x1, e.y1);
         ctx.lineTo(e.x2, e.y2);
         ctx.stroke();
       } else if (e.kind === 'death') {
         ctx.beginPath();
-        ctx.arc(e.x, e.y, e.r + (1 - k) * 10, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(255,255,255,${k * 0.5})`;
-        ctx.lineWidth = 1.5;
+        ctx.arc(e.x, e.y, e.r + (1 - k) * 12, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(30,34,38,${k * 0.6})`;
+        ctx.lineWidth = 2;
         ctx.stroke();
       } else if (e.kind === 'ping') {
         // Order marker: white for a move, amber for an attack-move.
-        const color = e.faction === -2 ? '255,180,80' : '235,245,255';
+        const color = e.faction === -2 ? '255,140,0' : '255,255,255';
         ctx.beginPath();
-        ctx.arc(e.x, e.y, 4 + (1 - k) * 16, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(${color},${k * 0.85})`;
-        ctx.lineWidth = 1.5;
+        ctx.arc(e.x, e.y, 5 + (1 - k) * 18, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(${color},${k})`;
+        ctx.lineWidth = 2.5;
         ctx.stroke();
       } else if (e.kind === 'capture') {
         ctx.beginPath();
-        ctx.arc(e.x, e.y, CITY.radius + (1 - k) * 60, 0, Math.PI * 2);
-        ctx.strokeStyle = `${this.colorOf(e.faction)}${Math.round(k * 180).toString(16).padStart(2, '0')}`;
-        ctx.lineWidth = 2;
+        ctx.arc(e.x, e.y, CITY.radius + (1 - k) * 70, 0, Math.PI * 2);
+        ctx.strokeStyle = this.colorOf(e.faction);
+        ctx.globalAlpha = k;
+        ctx.lineWidth = 3;
         ctx.stroke();
+        ctx.globalAlpha = 1;
       }
     }
   }
 
-  drawMinimap(game, camera, viewerFaction) {
+  drawMinimap(game, camera) {
     const ctx = this.minimapCtx;
     if (!ctx || !this.minimapBase) return;
     const scale = this.minimapBase.width / game.terrain.width;
@@ -358,19 +469,22 @@ export class Renderer {
 
     for (const c of game.cities) {
       ctx.fillStyle = this.colorOf(c.owner);
+      ctx.strokeStyle = '#12161a';
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.arc(c.x * scale, c.y * scale, 3.5, 0, Math.PI * 2);
+      ctx.arc(c.x * scale, c.y * scale, 4, 0, Math.PI * 2);
       ctx.fill();
+      ctx.stroke();
     }
     for (const u of game.units) {
       ctx.fillStyle = this.colorOf(u.faction);
-      const s = u.type === 'heavy' ? 2.2 : 1.4;
+      const s = u.type === 'heavy' ? 3 : 2;
       ctx.fillRect(u.x * scale - s / 2, u.y * scale - s / 2, s, s);
     }
 
     const b = camera.bounds;
-    ctx.strokeStyle = 'rgba(255,255,255,0.65)';
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#12161a';
+    ctx.lineWidth = 1.5;
     ctx.strokeRect(b.left * scale, b.top * scale, (b.right - b.left) * scale, (b.bottom - b.top) * scale);
   }
 }

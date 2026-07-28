@@ -5,7 +5,13 @@ import { load, save } from './storage.js';
 
 const EDITOR_WIDTH = 2000;
 const EDITOR_HEIGHT = 1300;
-const TOOL_TERRAIN = { clear: TERRAIN.CLEAR, rough: TERRAIN.ROUGH, water: TERRAIN.WATER };
+const TOOL_TERRAIN = {
+  plains: TERRAIN.PLAINS,
+  forest: TERRAIN.FOREST,
+  hills: TERRAIN.HILLS,
+  mountain: TERRAIN.MOUNTAIN,
+  water: TERRAIN.WATER,
+};
 
 export function listCustomMaps() {
   return load('customMaps', []);
@@ -20,7 +26,7 @@ export class MapEditor {
     this.app = app;
     this.canvas = document.getElementById('editor-canvas');
     this.ctx = this.canvas.getContext('2d');
-    this.tool = 'clear';
+    this.tool = 'plains';
     this.brush = 70;
     this.owner = -1;
     this.painting = false;
@@ -164,20 +170,23 @@ export class MapEditor {
       const color = city.slot < 0 ? NEUTRAL_COLOR : FACTION_COLORS[city.slot % FACTION_COLORS.length];
       ctx.beginPath();
       ctx.arc(city.x, city.y, CITY.captureRadius, 0, Math.PI * 2);
-      ctx.strokeStyle = `${color}22`;
+      ctx.strokeStyle = `${color}55`;
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.beginPath();
       ctx.arc(city.x, city.y, CITY.radius, 0, Math.PI * 2);
-      ctx.fillStyle = '#0d1119';
+      ctx.fillStyle = '#ffffff';
       ctx.fill();
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = color;
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = '#12161a';
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(city.x, city.y, CITY.radius * 0.42, 0, Math.PI * 2);
+      ctx.arc(city.x, city.y, CITY.radius * 0.5, 0, Math.PI * 2);
       ctx.fillStyle = color;
       ctx.fill();
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = '#12161a';
+      ctx.stroke();
     }
 
     ctx.strokeStyle = 'rgba(255,255,255,0.16)';

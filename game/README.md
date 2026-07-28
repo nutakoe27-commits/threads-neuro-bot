@@ -48,14 +48,34 @@ required for the test and tuning scripts below.
 | HP | 42 | 165 |
 | Damage | 7.5/s | 27/s |
 | Range | 30 | 40 |
-| Speed | 68 | 42 |
-| Build time | 4.5s | 12s |
+| Speed | 68 | 44 |
+| Build time | 4.5s | 11s |
 | In rough terrain | 0.85× speed, **0.8× damage taken** | 0.42× speed, 0.35× damage, **1.35× damage taken** |
 
 Light wins through numbers and doesn't care about terrain — it even takes cover
 in the rough. Heavy is a battering ram that only works in the open: in forests it
 crawls, barely scratches anything, and dies fast. Heavies also path *around*
 rough ground rather than through it.
+
+On screen: light is a plain dot, heavy wears a thick black ring.
+
+### The ground
+
+| | Passable | Notes |
+|---|---|---|
+| Plains (light green) | yes | Open ground. Everything works, heavies best of all. |
+| Forest (dark green) | yes | Rough: heavies crawl and barely hurt anything, light takes cover. |
+| Hills (grey) | yes | Rough, and slightly slow for everyone. |
+| Water (blue) | **no** | Only crossable by bridge. |
+| Mountain (dark grey) | **no** | Solid. |
+| Road / bridge | yes | 1.35× / 1.25× marching speed. Pathing prefers them. |
+
+Roads are generated per map as a minimum spanning tree over the cities, and turn
+into bridges wherever they cross water.
+
+The black line on the map is the **front**: every point belongs to whoever owns
+the nearest city, and the line is the boundary between two owners. Cities are
+discs; a player's starting city is a star.
 
 ## Controls
 
@@ -69,8 +89,21 @@ rough ground rather than through it.
 | `Tab` | Cycle your cities · `F` centre on selection · `Ctrl`+`1..9` control groups |
 | Arrows / screen edge / middle-drag | Pan · wheel to zoom · `Space` pause · `Esc` menu |
 
-On touch devices: drag to pan, pinch to zoom, tap to select, tap the ground to
-move, long-press to attack-move.
+### On a phone
+
+The whole game is playable with one thumb. Drag to pan, pinch to zoom, tap a unit
+or city to select it, tap the ground to move there. Five large buttons sit along
+the bottom:
+
+* **Pan / Select** — flips dragging between moving the camera and drawing a
+  selection box. A phone has no modifier keys, so this is an explicit mode.
+* **Attack** — makes the next tap an attack-move. A long press does the same
+  thing without the button.
+* **All**, **Stop**, **Hold** — select the whole army, halt, or dig in.
+
+The opening zoom is chosen from the viewport, so a phone starts with a usable
+slice of map rather than the desktop framing. The HUD collapses to one row on
+narrow screens, and the game pauses itself when the tab goes to the background.
 
 ## Modes
 
@@ -78,7 +111,8 @@ move, long-press to attack-move.
   five hand-built maps.
 * **Bot skill** — Recruit, Officer, Marshal. The tiers are verified to actually
   rank (see below), not just labelled differently.
-* **Map editor** — paint terrain, place cities, save to local storage, play it.
+* **Map editor** — paint plains, forest, hills, mountains and water, place
+  cities, save to local storage, play it.
 * **Replays** — every finished match is recorded and can be replayed, scrubbed
   and re-watched. The simulation is deterministic, so a replay is just the seed
   plus the command log.
@@ -90,11 +124,14 @@ game/
   index.html          screens, HUD, overlays
   style.css
   src/
-    config.js         all balance numbers live here
+    config.js         all balance numbers and the terrain table live here
     game.js           the simulation: combat, capture, supply, production
     ai.js             bot controller — issues the same commands a human does
     pathfinder.js     A* over the terrain grid, with per-unit-type terrain costs
-    terrain.js        terrain grid, blob generation, run-length encoding
+    terrain.js        terrain grid, blob generation, roads, run-length encoding
+    contour.js        cell grid -> smooth outlines (terrain shapes, front lines)
+    territory.js      who owns which ground, and the border between owners
+    menu-demo.js      the live bot match behind the title screen
     maps.js           the built-in maps
     entities.js       Unit and City
     session.js        one match: loop, camera, HUD, result
@@ -134,11 +171,22 @@ npm run tune:units  # heavy-leaning bot vs all-light bot, same tactics
 npm run build       # dist/war-of-dots.zip, ready to upload
 ```
 
-`tune.mjs` and `tune-units.mjs` are how the current numbers were arrived at. The
-first pass had the difficulty tiers *inverted* — "Marshal" lost to "Recruit" 7
-times out of 9 — and heavies at a 19% win rate against an all-light bot with
-identical tactics. Both were found by running the sweeps, not by reading the
-code.
+`tune.mjs` and `tune-units.mjs` are how the current numbers were arrived at, and
+they have earned their keep twice:
+
+* The first pass had the difficulty tiers *inverted* — "Marshal" lost to
+  "Recruit" 7 times out of 9 — and heavies at a 19% win rate against an
+  all-light bot with identical tactics.
+* Adding roads and mountains silently changed which tactics win. Two levers
+  flipped sign (steering around defended cities went from a liability to an
+  advantage) and heavies fell back to 28%. The tiers had quietly collapsed to
+  hard-beats-normal 60% before the sweep caught it.
+
+Neither regression was visible from reading the code. Re-run `npm run tune` and
+`npm run tune:units` after any change to terrain, unit stats or maps.
+
+Current state: hard beats normal 22/30, hard beats easy 28/30, normal beats easy
+27/30, and a heavy-leaning bot beats an all-light bot 56% of the time.
 
 ## Packaging for a portal
 

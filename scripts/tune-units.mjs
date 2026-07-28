@@ -39,9 +39,11 @@ const page = await browser.newPage();
 await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle' });
 
 const candidates = [
-  ['current 13s', {}],
-  ['build 12s spd42', { buildTime: 12, speed: 42 }],
-  ['build 11s spd42', { buildTime: 11, speed: 42 }],
+  ['current 12s/42', {}],
+  ['11s/44', { buildTime: 11, speed: 44 }],
+  ['10s/46', { buildTime: 10, speed: 46 }],
+  ['10s/46 soft rough', { buildTime: 10, speed: 46, rough: { speed: 0.5, damage: 0.4, taken: 1.3 } }],
+  ['9s/48', { buildTime: 9, speed: 48 }],
 ];
 
 const out = await page.evaluate(

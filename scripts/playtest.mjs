@@ -90,6 +90,7 @@ const state = (page) =>
         captured: f.captured,
       })),
       neutralCities: g.cities.filter((c) => c.owner < 0).length,
+      onImpassable: g.units.filter((u) => !g.terrain.isPassable(u.x, u.y)).length,
       starving: g.units.filter((u) => u.starving).length,
       commands: g.commandLog.length,
     };
@@ -128,6 +129,15 @@ async function main() {
   let s = await state(page);
   check('match started', !!s && s.units === 6, `units=${s?.units}`);
   check('cities split 1/1/rest neutral', s.byFaction[0].cities === 1 && s.byFaction[1].cities === 1);
+  // Regression guard: the opening zoom was once computed while the game screen
+  // was still hidden, which silently opened every match fully zoomed out.
+  check('opens at a sane zoom', await page.evaluate(() => {
+    const c = window.warOfDots.session.camera;
+    return c.zoom > c.minZoom * 1.5 && c.zoom <= 1.5;
+  }), await page.evaluate(() => {
+    const c = window.warOfDots.session.camera;
+    return `zoom=${c.zoom.toFixed(2)} min=${c.minZoom.toFixed(2)}`;
+  }));
 
   await runMatch(page, 6, 4);
   s = await state(page);
@@ -151,6 +161,24 @@ async function main() {
   s = await state(page);
   check('human commands recorded', s.commands > 2);
   check('neutral cities are being taken', s.neutralCities < 7, `neutral=${s.neutralCities}`);
+  check('nothing walks through water or mountains (mid-match)', s.onImpassable === 0, `stuck=${s.onImpassable}`);
+  check('roads and bridges were generated', await page.evaluate(() => {
+    const t = window.warOfDots.session.game.terrain;
+    let road = 0;
+    let bridge = 0;
+    for (const c of t.cells) {
+      if (c === 5) road++;
+      if (c === 6) bridge++;
+    }
+    return road > 200 && bridge > 0;
+  }));
+  // With two sides still on the map there must be a border between them; once
+  // somebody owns everything, having no front line is the correct answer.
+  check('front line is drawn while the map is contested', await page.evaluate(() => {
+    const s = window.warOfDots.session;
+    const owners = new Set(s.game.cities.map((c) => c.owner));
+    return owners.size < 2 || s.renderer.frontLines.length > 0;
+  }));
 
   // City panel + production switch.
   await page.keyboard.press('Tab');
@@ -173,6 +201,7 @@ async function main() {
     `kills=${s.byFaction[0].killed}/${s.byFaction[1].killed}`);
   check('supply pressure exists', s.byFaction.some((f) => f.cities > 1), 'no expansion at all');
   check('no runaway unit count', s.units < 400, `units=${s.units}`);
+  check('nothing walks through water or mountains', s.onImpassable === 0, `stuck in solid=${s.onImpassable}`);
 
   // Zoomed-out overview shot.
   await page.evaluate(() => {
@@ -197,7 +226,7 @@ async function main() {
   await page.evaluate(() => window.warOfDots.quitMatch());
   await page.click('[data-action="goto-editor"]');
   await page.waitForTimeout(400);
-  await page.click('#editor-tools [data-tool="rough"]');
+  await page.click('#editor-tools [data-tool="forest"]');
   const canvasBox = await page.locator('#editor-canvas').boundingBox();
   await page.mouse.move(canvasBox.x + 400, canvasBox.y + 300);
   await page.mouse.down();
@@ -276,7 +305,31 @@ async function main() {
   await mobile.click('[data-action="goto-setup"]');
   await mobile.click('[data-action="start-match"]');
   await mobile.waitForTimeout(1200);
-  check('touch controls shown on mobile', await mobile.isVisible('#touch-bar .btn'));
+  check('touch controls shown on mobile', await mobile.isVisible('#touch-bar .touch-btn'));
+  await mobile.evaluate(() => {
+    const s = window.warOfDots.session;
+    s.input.selectAllArmy();
+  });
+  await mobile.waitForTimeout(400);
+  if (WANT_SHOTS) {
+    fs.mkdirSync(SHOT_DIR, { recursive: true });
+    await mobile.screenshot({ path: path.join(SHOT_DIR, '07-mobile.png') });
+    console.log('  shot 07-mobile.png');
+  }
+  check('touch mode toggles to box-select', await mobile.evaluate(() => {
+    const app = window.warOfDots;
+    app.handleAction('touch-mode');
+    const selecting = app.session.input.touchMode === 'select';
+    app.handleAction('touch-mode');
+    return selecting && app.session.input.touchMode === 'pan';
+  }));
+  check('attack button arms an attack-move', await mobile.evaluate(() => {
+    const app = window.warOfDots;
+    app.handleAction('touch-attack');
+    const armed = app.session.input.touchAttackArmed;
+    app.handleAction('touch-attack');
+    return armed && !app.session.input.touchAttackArmed;
+  }));
   check('no horizontal overflow', await mobile.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
   await mobile.close();
 

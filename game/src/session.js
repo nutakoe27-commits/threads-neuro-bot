@@ -58,14 +58,16 @@ export class Session {
     this.lastTs = 0;
 
     const home = this.game.cities.find((c) => c.owner === this.viewerFaction);
-    this.camera.zoom = 1.2;
     if (home) this.camera.centerOn(home.x, home.y);
+    // The default zoom needs real canvas dimensions, so it is applied by the
+    // caller once the game screen is actually on screen.
 
     this.onResize = () => this.resize();
     window.addEventListener('resize', this.onResize);
     this.setupReplayBar();
     this.resize();
     this.renderFactionBars();
+    this.updateTouchButtons();
   }
 
   get game() {
@@ -150,11 +152,37 @@ export class Session {
     this.camera.setViewport(view.width, view.height);
   }
 
+  // Aim for a comparable slice of map on every screen: a phone should not open
+  // at the same zoom as a desktop and see almost nothing.
+  applyDefaultZoom() {
+    const view = this.renderer.resize();
+    this.camera.setViewport(view.width, view.height);
+    const fit = Math.min(view.width / 700, view.height / 520);
+    this.camera.zoom = Math.max(this.camera.minZoom, Math.min(1.5, fit));
+    this.camera.clamp();
+  }
+
   // -------------------------------------------------------------- callbacks
 
   onSelectionChanged() {
     this.selectionDirty = true;
     this.updateSelectionPanel();
+  }
+
+  onTouchStateChanged() {
+    this.updateTouchButtons();
+  }
+
+  updateTouchButtons() {
+    const mode = document.getElementById('touch-mode');
+    const attack = document.getElementById('touch-attack');
+    if (mode) {
+      const selecting = this.input.touchMode === 'select';
+      mode.classList.toggle('active', selecting);
+      mode.querySelector('.glyph').textContent = selecting ? '▭' : '✥';
+      mode.querySelector('.cap').textContent = selecting ? 'Select' : 'Pan';
+    }
+    if (attack) attack.classList.toggle('active', this.input.touchAttackArmed);
   }
 
   pingMarker(x, y, attackMove) {

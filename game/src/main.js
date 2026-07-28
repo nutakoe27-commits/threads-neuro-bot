@@ -8,6 +8,7 @@ import { MapEditor, listCustomMaps } from './editor.js';
 import { listReplays, deleteReplay, deserializeSetup } from './replay.js';
 import { load, save } from './storage.js';
 import { initPlatform, platform } from './platform.js';
+import { MenuDemo } from './menu-demo.js';
 
 const SCREENS = ['screen-menu', 'screen-setup', 'screen-game', 'screen-editor', 'screen-replays'];
 
@@ -18,6 +19,7 @@ class App {
     this.editor = null;
     this.prefs = load('prefs', { mapId: 'duel', mode: 'duel', difficulty: 'normal', speed: 1 });
     this.helpReturn = null;
+    this.menuDemo = new MenuDemo('menu-canvas');
   }
 
   init() {
@@ -59,6 +61,10 @@ class App {
   show(id) {
     for (const s of SCREENS) document.getElementById(s).classList.toggle('active', s === id);
     this.current = id;
+    // The title screen plays a live bot match behind the menu; stop it as soon
+    // as we leave, so it never competes with the real game for frame time.
+    if (id === 'screen-menu') this.menuDemo.start();
+    else this.menuDemo.stop();
   }
 
   flashGlobal(message) {
@@ -192,7 +198,7 @@ class App {
     document.getElementById('overlay-ingame').classList.add('hidden');
     this.session = session;
     this.show('screen-game');
-    session.resize();
+    session.applyDefaultZoom();
     session.start();
   }
 
@@ -322,6 +328,20 @@ class App {
         break;
       case 'speed-down':
         if (session) session.changeSpeed(-1);
+        break;
+      case 'touch-mode':
+        if (session) {
+          session.input.setTouchMode(session.input.touchMode === 'pan' ? 'select' : 'pan');
+          session.updateTouchButtons();
+          session.flash(session.input.touchMode === 'pan' ? 'Drag pans the map' : 'Drag selects units');
+        }
+        break;
+      case 'touch-attack':
+        if (session) {
+          session.input.touchAttackArmed = !session.input.touchAttackArmed;
+          session.updateTouchButtons();
+          if (session.input.touchAttackArmed) session.flash('Tap a target to attack-move');
+        }
         break;
       case 'select-army':
         if (session) session.input.selectAllArmy();

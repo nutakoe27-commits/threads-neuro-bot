@@ -24,6 +24,11 @@ export class InputController {
     this.lastClickPos = { x: 0, y: 0 };
     this.touches = new Map();
     this.pinchDist = 0;
+    // Touch drag either pans the camera or draws a selection box; a phone has
+    // no modifier keys, so this is an explicit mode the player toggles.
+    this.touchMode = 'pan';
+    this.touchAttackArmed = false;
+    this.touchBox = null;
     this.longPressTimer = 0;
     this.enabled = true;
 
@@ -410,15 +415,36 @@ export class InputController {
 
   // ------------------------------------------------------------------- touch
 
+  setTouchMode(mode) {
+    this.touchMode = mode;
+    this.touchBox = null;
+    this.selectionBox = null;
+  }
+
   onTouchStart(e) {
     e.preventDefault();
+    const rect = this.canvas.getBoundingClientRect();
     for (const t of e.changedTouches) {
-      this.touches.set(t.identifier, { x: t.clientX, y: t.clientY, sx: t.clientX, sy: t.clientY, time: performance.now(), moved: false });
+      this.touches.set(t.identifier, {
+        x: t.clientX,
+        y: t.clientY,
+        sx: t.clientX,
+        sy: t.clientY,
+        time: performance.now(),
+        moved: false,
+      });
+    }
+    if (this.touches.size === 1 && this.touchMode === 'select') {
+      const t = e.changedTouches[0];
+      const p = { x: t.clientX - rect.left, y: t.clientY - rect.top };
+      this.touchBox = { x1: p.x, y1: p.y, x2: p.x, y2: p.y, additive: false };
     }
     if (this.touches.size === 2) {
       const [a, b] = [...this.touches.values()];
       this.pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
-      this.boxSelectTouch = null;
+      // Two fingers always mean zoom/pan, never a selection box.
+      this.touchBox = null;
+      this.selectionBox = null;
     }
   }
 
@@ -432,7 +458,13 @@ export class InputController {
       rec.x = t.clientX;
       rec.y = t.clientY;
       if (Math.hypot(t.clientX - rec.sx, t.clientY - rec.sy) > 12) rec.moved = true;
-      if (this.touches.size === 1 && rec.moved) {
+      if (this.touches.size !== 1 || !rec.moved) continue;
+      if (this.touchBox) {
+        const rect = this.canvas.getBoundingClientRect();
+        this.touchBox.x2 = t.clientX - rect.left;
+        this.touchBox.y2 = t.clientY - rect.top;
+        this.selectionBox = { ...this.touchBox };
+      } else {
         this.camera.move(-dx / this.camera.zoom, -dy / this.camera.zoom);
       }
     }
@@ -454,6 +486,17 @@ export class InputController {
     for (const t of e.changedTouches) {
       const rec = this.touches.get(t.identifier);
       this.touches.delete(t.identifier);
+
+      // Finished a box-select drag.
+      if (rec && rec.moved && this.touchBox && this.touches.size === 0) {
+        const box = this.touchBox;
+        this.touchBox = null;
+        this.selectionBox = null;
+        if (Math.hypot(box.x2 - box.x1, box.y2 - box.y1) > 12) {
+          this.boxSelect(box);
+          continue;
+        }
+      }
       if (!rec || rec.moved || this.touches.size > 0) continue;
       const rect = this.canvas.getBoundingClientRect();
       const p = { x: rec.sx - rect.left, y: rec.sy - rect.top };
@@ -463,9 +506,12 @@ export class InputController {
       const unit = this.unitAt(world.x, world.y, 12);
       const city = this.cityAt(world.x, world.y);
 
-      if (held && this.selection.units.size) {
-        // Long press = attack-move, the aggressive version of a tap order.
+      // Long press, or the armed Attack button, makes the order an attack-move.
+      const aggressive = held || this.touchAttackArmed;
+
+      if (aggressive && this.selection.units.size && !(unit && unit.faction === this.faction)) {
         this.commandAt(world.x, world.y, true);
+        this.disarmTouchAttack();
         continue;
       }
       if (unit && unit.faction === this.faction) {
@@ -488,6 +534,13 @@ export class InputController {
       }
     }
     if (this.touches.size < 2) this.pinchDist = 0;
+    if (this.touches.size === 0) this.touchBox = null;
+  }
+
+  disarmTouchAttack() {
+    if (!this.touchAttackArmed) return;
+    this.touchAttackArmed = false;
+    this.session.onTouchStateChanged?.();
   }
 
   onMinimap(e) {

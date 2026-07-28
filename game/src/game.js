@@ -1,5 +1,5 @@
-import { DT, TERRAIN, UNITS, CITY, STARVE_DPS, RESUPPLY_HPS } from './config.js';
-import { Terrain } from './terrain.js';
+import { DT, UNITS, CITY, STARVE_DPS, RESUPPLY_HPS, info } from './config.js';
+import { Terrain, buildRoads } from './terrain.js';
 import { Pathfinder } from './pathfinder.js';
 import { Unit, City, ORDER } from './entities.js';
 import { makeRng } from './rng.js';
@@ -66,6 +66,8 @@ export class Game {
       this.terrain.applyFeatures(this.mapDef.features || [], this.mapDef.seed ?? this.seed);
     }
     for (const c of this.mapDef.cities) this.terrain.clearAround(c.x, c.y, CITY.radius * 2.6);
+    // Roads are derived, not stored: they follow whatever cities the map has.
+    buildRoads(this.terrain, this.mapDef.cities, this.mapDef.seed ?? this.seed);
 
     this.pathfinder = new Pathfinder(this.terrain);
     this.hash = new SpatialHash(72);
@@ -90,8 +92,12 @@ export class Game {
 
     this.mapDef.cities.forEach((c, i) => {
       const slotActive = c.slot >= 0 && this.factions[c.slot] && this.factions[c.slot].alive;
-      this.cities.push(new City(i, c.x, c.y, slotActive ? c.slot : -1));
+      const city = new City(i, c.x, c.y, slotActive ? c.slot : -1);
+      city.capital = c.slot >= 0; // a start position stays a capital even if it falls
+      this.cities.push(city);
     });
+    // Bumped whenever a city changes hands, so the front line can be cached.
+    this.territoryVersion = 0;
 
     // Starting garrison.
     for (const city of this.cities) {
@@ -341,6 +347,7 @@ export class Game {
           city.rally = null;
           city.produce = 'light';
           this.factions[info.faction].captured++;
+          this.territoryVersion++;
           this.effects.push({ kind: 'capture', x: city.x, y: city.y, t: 0, life: 1.2, faction: info.faction });
           this.onCityCaptured?.(city, previous, info.faction);
         }
@@ -415,10 +422,19 @@ export class Game {
     return best;
   }
 
+  // Combat modifiers from the ground a unit is standing on, or null on terrain
+  // that treats everyone the same.
   terrainMods(unit) {
-    const cell = this.terrain.at(unit.x, unit.y);
-    if (cell === TERRAIN.ROUGH) return unit.stats.rough;
-    return null;
+    const cell = info(this.terrain.at(unit.x, unit.y));
+    return cell.rough ? unit.stats.rough : null;
+  }
+
+  // Movement speed multiplier: the rough penalty for heavies, plus the flat
+  // terrain speed that makes roads worth marching along.
+  speedFactor(unit) {
+    const cell = info(this.terrain.at(unit.x, unit.y));
+    const rough = cell.rough ? unit.stats.rough.speed : 1;
+    return rough * cell.speed;
   }
 
   findTarget(unit, radius) {
@@ -552,8 +568,7 @@ export class Game {
     const d = Math.hypot(dx, dy);
     if (d < 0.5) return false;
 
-    const mods = this.terrainMods(unit);
-    const speed = unit.stats.speed * (mods ? mods.speed : 1);
+    const speed = unit.stats.speed * this.speedFactor(unit);
 
     let vx = (dx / d) * speed;
     let vy = (dy / d) * speed;
@@ -575,8 +590,7 @@ export class Game {
   separate(unit, dt) {
     const sep = this.separationVector(unit);
     if (!sep.x && !sep.y) return;
-    const mods = this.terrainMods(unit);
-    const speed = unit.stats.speed * (mods ? mods.speed : 1) * 0.55;
+    const speed = unit.stats.speed * this.speedFactor(unit) * 0.55;
     this.applyVelocity(unit, sep.x * speed, sep.y * speed, dt);
   }
 

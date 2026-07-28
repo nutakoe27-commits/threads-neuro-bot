@@ -15,8 +15,13 @@
 
   <!-- ------------------------------------------------------------- main menu -->
   <section class="screen active" id="screen-menu">
+    <canvas id="menu-canvas"></canvas>
+    <div class="menu-scrim"></div>
     <div class="menu-wrap">
-      <h1 class="title">WAR<span class="dot">•</span>OF<span class="dot">•</span>DOTS</h1>
+      <h1 class="title">
+        <span class="mark"><i class="pip light"></i><i class="pip heavy"></i></span>
+        WAR OF DOTS
+      </h1>
       <p class="tagline">Two units. Cities that feed them. Nothing else in your way.</p>
       <nav class="menu">
         <button class="btn primary" data-action="goto-setup">Skirmish</button>
@@ -93,9 +98,15 @@
     <div class="hud hud-bottom">
       <div class="selection-panel" id="selection-panel"></div>
       <div class="touch-bar" id="touch-bar">
-        <button class="btn small" data-action="select-army">All</button>
-        <button class="btn small" data-action="cmd-stop">Stop</button>
-        <button class="btn small" data-action="cmd-hold">Hold</button>
+        <button class="touch-btn" id="touch-mode" data-action="touch-mode" title="Drag: pan or box-select">
+          <span class="glyph">✥</span><span class="cap">Pan</span>
+        </button>
+        <button class="touch-btn" id="touch-attack" data-action="touch-attack" title="Next tap is an attack-move">
+          <span class="glyph">⚔</span><span class="cap">Attack</span>
+        </button>
+        <button class="touch-btn" data-action="select-army"><span class="glyph">◎</span><span class="cap">All</span></button>
+        <button class="touch-btn" data-action="cmd-stop"><span class="glyph">■</span><span class="cap">Stop</span></button>
+        <button class="touch-btn" data-action="cmd-hold"><span class="glyph">⛨</span><span class="cap">Hold</span></button>
       </div>
       <div class="minimap-wrap">
         <canvas id="minimap"></canvas>
@@ -117,8 +128,10 @@
     <div class="hud hud-top">
       <button class="btn ghost" data-action="editor-exit">← Menu</button>
       <div class="tool-group" id="editor-tools">
-        <button class="btn small tool active" data-tool="clear">Plains</button>
-        <button class="btn small tool" data-tool="rough">Rough</button>
+        <button class="btn small tool active" data-tool="plains">Plains</button>
+        <button class="btn small tool" data-tool="forest">Forest</button>
+        <button class="btn small tool" data-tool="hills">Hills</button>
+        <button class="btn small tool" data-tool="mountain">Mountain</button>
         <button class="btn small tool" data-tool="water">Water</button>
         <button class="btn small tool" data-tool="city">City</button>
         <button class="btn small tool" data-tool="erase">Erase city</button>
@@ -177,6 +190,17 @@
           </ul>
         </section>
         <section>
+          <h3>The ground</h3>
+          <ul class="legend">
+            <li><span class="swatch" style="background:#a5c93c"></span><strong>Plains</strong> — open. Everything works here, heavies best of all.</li>
+            <li><span class="swatch" style="background:#2f7d32"></span><strong>Forest</strong> — passable, but heavies crawl and barely hurt anything. Light infantry takes cover here.</li>
+            <li><span class="swatch" style="background:#939f9f"></span><strong>Hills</strong> — same penalty as forest, slightly slow for everyone.</li>
+            <li><span class="swatch" style="background:#3fa9f5"></span><strong>Water</strong> and <span class="swatch" style="background:#6f7479"></span><strong>mountains</strong> — impassable. Nothing crosses except by bridge.</li>
+            <li><span class="swatch" style="background:#b5b5b0"></span><strong>Roads</strong> and <span class="swatch" style="background:#8a5a2b"></span><strong>bridges</strong> — faster marching, and the only way over water.</li>
+          </ul>
+          <p class="touch-note">The black line is the front: everything inside it is fed by your cities.</p>
+        </section>
+        <section>
           <h3>Units</h3>
           <p><span class="pip light"></span><strong>Light</strong> — cheap and quick, fine in any terrain, and it even takes cover in rough ground. Wins through numbers.</p>
           <p><span class="pip heavy"></span><strong>Heavy</strong> — slow, expensive, brutal in the open. In forests it crawls and barely scratches anything. Use it to break lines and to hold clear ground.</p>
@@ -192,7 +216,11 @@
             <li><kbd>Tab</kbd> cycle cities · <kbd>F</kbd> centre on selection · <kbd>Ctrl</kbd>+<kbd>1..9</kbd> groups</li>
             <li>Arrows / screen edge / middle-drag to pan · wheel to zoom · <kbd>Space</kbd> pause</li>
           </ul>
-          <p class="touch-note">On touch: drag to pan, pinch to zoom, tap to select, tap the ground to move, long press to attack-move.</p>
+          <p class="touch-note">
+            On touch: drag to pan, pinch to zoom, tap a unit or city to select, tap the ground to move.
+            <strong>Pan/Select</strong> switches dragging to a selection box, <strong>Attack</strong> makes your next
+            tap an attack-move, and a long press does the same without the button.
+          </p>
         </section>
       </div>
       <button class="btn primary" data-action="close-help">Got it</button>

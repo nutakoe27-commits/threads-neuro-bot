@@ -1,4 +1,4 @@
-import { TERRAIN } from './config.js';
+import { info } from './config.js';
 import { CELL } from './terrain.js';
 
 // Minimal binary heap keyed by f-score.
@@ -55,21 +55,22 @@ export class Pathfinder {
     this.cache.clear();
   }
 
-  // Rough ground is passable for everyone but heavies pay dearly for it,
-  // so their paths naturally hug the open lanes.
+  // Rough ground is passable for everyone but heavies pay dearly for it, so
+  // their paths naturally hug the open lanes and the roads.
   cost(type, unitKey) {
-    if (type === TERRAIN.WATER) return Infinity;
-    if (type === TERRAIN.ROUGH) return unitKey === 'heavy' ? 3.2 : 1.35;
-    return 1;
+    const t = info(type);
+    if (!t.passable) return Infinity;
+    if (t.rough) return unitKey === 'heavy' ? t.pathCost * 2.3 : t.pathCost;
+    return t.pathCost;
   }
 
   nearestPassable(cx, cy) {
-    if (this.terrain.atCell(cx, cy) !== TERRAIN.WATER) return [cx, cy];
+    if (info(this.terrain.atCell(cx, cy)).passable) return [cx, cy];
     for (let r = 1; r < 12; r++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-          if (this.terrain.atCell(cx + dx, cy + dy) !== TERRAIN.WATER) return [cx + dx, cy + dy];
+          if (info(this.terrain.atCell(cx + dx, cy + dy)).passable) return [cx + dx, cy + dy];
         }
       }
     }
@@ -127,9 +128,9 @@ export class Pathfinder {
         const cellType = t.atCell(nx, ny);
         const c = this.cost(cellType, unitKey);
         if (!isFinite(c)) continue;
-        // Do not cut diagonal corners through water.
+        // Do not cut diagonal corners through solid terrain.
         if (dx && dy) {
-          if (t.atCell(cx + dx, cy) === TERRAIN.WATER || t.atCell(cx, cy + dy) === TERRAIN.WATER) continue;
+          if (!info(t.atCell(cx + dx, cy)).passable || !info(t.atCell(cx, cy + dy)).passable) continue;
         }
         const idx = ny * t.cols + nx;
         if (closed[idx]) continue;
@@ -186,10 +187,10 @@ export class Pathfinder {
     for (let i = 1; i < steps; i++) {
       const x = a.x + ((b.x - a.x) * i) / steps;
       const y = a.y + ((b.y - a.y) * i) / steps;
-      const cell = this.terrain.at(x, y);
-      if (cell === TERRAIN.WATER) return false;
+      const cell = info(this.terrain.at(x, y));
+      if (!cell.passable) return false;
       // Heavies should not be shortcut through forests they were routed around.
-      if (unitKey === 'heavy' && cell === TERRAIN.ROUGH) return false;
+      if (unitKey === 'heavy' && cell.rough) return false;
     }
     return true;
   }

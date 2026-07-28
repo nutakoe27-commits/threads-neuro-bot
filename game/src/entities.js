@@ -60,6 +60,7 @@ export class City {
     this.captureProgress = 0;
     this.rally = null;
     this.radius = CITY.radius;
+    this.capital = false;
   }
 
   buildTime() {
